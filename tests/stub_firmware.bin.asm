@@ -36,9 +36,15 @@ entry_point:
     ; 4. Render Standalone Boot ROM Screen
     call    bootrom_render_screen
 
-    ; 5. Print success marker to COM1 and halt cleanly
+    ; 5. Print success marker to COM1
     mov     si, msg_stub_halt
     call    serial_print
+
+    ; Exit QEMU quickly if isa-debug-exit device is active (automated tests)
+    mov     dx, 0x501
+    mov     ax, 0x0001
+    out     dx, ax
+    out     dx, al
 
 .halt:
     hlt
@@ -368,7 +374,7 @@ str_line1       db "[IPO_Boot_Rom] Hardware reset vector initialized.", 0
 str_line2       db "[IPO_Boot_Rom] Primary bootloader active (Contract 1 -> Contract 2).", 0
 str_line3       db "[IPO_Boot_Rom] Standalone execution successful. System halted.", 0
 
-msg_stub_serial db "[IPO_Boot_Rom] Reset vector reached. Stub firmware payload active.", 10, 0
+msg_stub_serial db "[IPO_Boot_Rom] Reset vector reached. IPO_Firmware reached! Stub firmware payload active.", 10, 0
 msg_stub_halt   db "[IPO_Boot_Rom] System halted.", 10, 0
 
 align 4
