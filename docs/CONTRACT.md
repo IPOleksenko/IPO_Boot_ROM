@@ -1,7 +1,7 @@
-# IPO_Boot_Rom Contract & Architecture Specification
+# IPO_Boot_ROM Contract & Architecture Specification
 
 ## 1. Overview
-`IPO_Boot_Rom` is an independent, bare-metal x86 Boot ROM that serves as the root of the system boot chain. It executes immediately from the CPU hardware reset vector without requiring any BIOS, firmware, or prior initialization.
+`IPO_Boot_ROM` is an independent, bare-metal x86 Boot ROM that serves as the root of the system boot chain. It executes immediately from the CPU hardware reset vector without requiring any BIOS, firmware, or prior initialization.
 
 ```
 +-------------------------------------------------------------+
@@ -10,7 +10,7 @@
                               |
                               v jmp far 0xF000:0xF800
 +-------------------------------------------------------------+
-| IPO_Boot_Rom (ROM segment 0xF000, offset 0xF800)           |
+| IPO_Boot_ROM (ROM segment 0xF000, offset 0xF800)           |
 | - cli, flat segments, stack setup (SS:SP = 0x0000:0x7000)   |
 | - COM1 (0x3F8) serial initialization                        |
 | - Direct VGA (0xB8000) text output                          |
@@ -21,7 +21,7 @@
                               |
                               v
 +-------------------------------------------------------------+
-| IPO_Firmware (RAM segment 0x0800, offset 0x0004)            |
+| Firmware Payload (RAM segment 0x0800, offset 0x0004)        |
 +-------------------------------------------------------------+
 ```
 
@@ -31,7 +31,7 @@
 | :--- | :--- | :--- | :--- |
 | `0x00000` | `0xFFFC0000` | — | Unused padding (`0xFF`) |
 | `0x30000` | `0xFFFF0000` | `0xF000:0x0000` | **Firmware Payload Slot** (up to 32 KB) |
-| `0x3F800` | `0xFFFFF800` | `0xF000:0xF800` | **Boot_Rom Init Code** (`init.asm`) |
+| `0x3F800` | `0xFFFFF800` | `0xF000:0xF800` | **Boot_ROM Init Code** (`init.asm`) |
 | `0x3FFF0` | `0xFFFFFFF0` | `0xF000:0xFFF0` | **Reset Vector** (16 bytes, `jmp 0xF000:0xF800`) |
 
 ## 3. Reset Vector Mechanics
@@ -46,7 +46,7 @@ jmp 0xF000:0xF800
 ```
 This far jump reloads `CS` with base `0x000F0000`, allowing normal 16-bit real-mode execution within the conventional 1 MB memory address space.
 
-## 4. Contract: IPO_Boot_Rom -> IPO_Firmware Handover
+## 4. Contract 2: Handover to Firmware Payload
 
 | Register / Resource | Value at Handover | Notes |
 | :--- | :--- | :--- |

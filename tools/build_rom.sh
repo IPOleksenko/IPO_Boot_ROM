@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build_rom.sh — Constructs a fixed-size ROM binary (256KB) for IPO_Boot_Rom
+# build_rom.sh — Constructs a fixed-size ROM binary (256KB) for IPO_Boot_ROM
 #
 # Arguments:
 #   $1 = ROMSIZE       (e.g., 262144)
@@ -34,9 +34,9 @@ else
     echo "[build_rom] No Firmware binary provided; leaving slot at offset $FW_OFFSET as 0xFF"
 fi
 
-# 3. Embed Boot_Rom init code at INIT_OFFSET
+# 3. Embed Boot_ROM init code at INIT_OFFSET
 init_size=$(stat -c %s "$INIT_BIN")
-echo "[build_rom] Embedding Boot_Rom init: $INIT_BIN ($init_size bytes) at offset $INIT_OFFSET (0x$(printf '%X' $INIT_OFFSET))"
+echo "[build_rom] Embedding Boot_ROM init: $INIT_BIN ($init_size bytes) at offset $INIT_OFFSET (0x$(printf '%X' $INIT_OFFSET))"
 dd if="$INIT_BIN" of="$OUTPUT_ROM" bs=1 seek="$INIT_OFFSET" conv=notrunc status=none
 
 # 4. Embed Reset Vector (last 16 bytes of ROM)

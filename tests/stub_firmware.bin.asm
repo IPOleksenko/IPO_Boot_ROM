@@ -1,4 +1,4 @@
-; stub_firmware.bin.asm — Minimal test firmware payload for IPO_Boot_Rom testing
+; stub_firmware.bin.asm — Minimal test firmware payload for IPO_Boot_ROM testing
 ; Loaded into RAM at 0x0800:0x0000 (Physical 0x08000)
 ; Initializes VGA text mode 03h and displays the standalone Boot ROM screen.
 
@@ -62,7 +62,7 @@ bootrom_render_screen:
     mov     ax, VGA_TEXT_SEG
     mov     es, ax
 
-    ; Row 0 Left (Col 0): "IPO_Boot_Rom" (attribute 0x0A: Light Green)
+    ; Row 0 Left (Col 0): "IPO_Boot_ROM" (attribute 0x0A: Light Green)
     xor     di, di
     mov     si, str_title
     mov     ah, 0x0A
@@ -373,20 +373,20 @@ vga_ac_data     db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07
                 db 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
                 db 0x0C, 0x00, 0x0F, 0x08, 0x00
 
-str_title       db "IPO_Boot_Rom", 0
+str_title       db "IPO_Boot_ROM", 0
 str_author      db "by IPOleksenko", 0
-str_line1       db "[IPO_Boot_Rom] CPU reset vector (0xFFFF0) reached in 16-bit Real Mode", 0
-str_line2       db "[IPO_Boot_Rom] System stack allocated at 0x0000:0x7000", 0
-str_line3       db "[IPO_Boot_Rom] COM1 serial console initialized (115200 baud, 8N1)", 0
-str_line4       db "[IPO_Boot_Rom] VGA text display adapter initialized (Mode 03h, 80x25)", 0
-str_line5       db "[IPO_Boot_Rom] ROM mapping verified (0xF0000 - 0xFFFFF, 256 KB Flash)", 0
-str_line6       db "[IPO_Boot_Rom] Hardware diagnostics passed. Primary bootloader ready.", 0
-str_line7       db "[IPO_Boot_Rom] Standalone mode: waiting for external BIOS Firmware payload...", 0
-str_line8       db "[IPO_Boot_Rom] System halted.", 0
+str_line1       db "[IPO_Boot_ROM] CPU reset vector (0xFFFF0) reached in 16-bit Real Mode", 0
+str_line2       db "[IPO_Boot_ROM] System stack allocated at 0x0000:0x7000", 0
+str_line3       db "[IPO_Boot_ROM] COM1 serial console initialized (115200 baud, 8N1)", 0
+str_line4       db "[IPO_Boot_ROM] VGA text display adapter initialized (Mode 03h, 80x25)", 0
+str_line5       db "[IPO_Boot_ROM] ROM mapping verified (0xF0000 - 0xFFFFF, 256 KB Flash)", 0
+str_line6       db "[IPO_Boot_ROM] Hardware diagnostics passed. Primary bootloader ready.", 0
+str_line7       db "[IPO_Boot_ROM] Standalone mode: waiting for external BIOS Firmware payload...", 0
+str_line8       db "[IPO_Boot_ROM] System halted.", 0
 
-msg_stub_serial db "[IPO_Boot_Rom] Reset vector reached. IPO_Firmware reached! Hardware diagnostics passed.", 10
-                db "[IPO_Boot_Rom] Standalone mode: waiting for external BIOS Firmware payload...", 10, 0
-msg_stub_halt   db "[IPO_Boot_Rom] System halted.", 10, 0
+msg_stub_serial db "[IPO_Boot_ROM] Reset vector reached. Firmware payload entry reached! Hardware diagnostics passed.", 10
+                db "[IPO_Boot_ROM] Standalone mode: waiting for external firmware payload...", 10, 0
+msg_stub_halt   db "[IPO_Boot_ROM] System halted.", 10, 0
 
 align 4
 vga_dac_data:

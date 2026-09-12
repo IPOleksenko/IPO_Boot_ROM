@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_qemu_test.sh — Automated test runner for IPO_Boot_Rom in QEMU
+# run_qemu_test.sh — Automated test runner for IPO_Boot_ROM in QEMU
 #
 # Arguments:
 #   $1 = Path to ROM binary (e.g., build/bootrom.bin)
@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROM="${1:-build/bootrom.bin}"
-EXPECTED="IPO_Firmware reached"
+EXPECTED="Firmware payload entry reached"
 TIMEOUT_SECS=5
 
 if [ ! -f "$ROM" ]; then
@@ -36,7 +36,7 @@ echo "$OUTPUT"
 echo "────────────────────────────────────────"
 
 if echo "$OUTPUT" | grep -Fq "$EXPECTED"; then
-    echo "✅ PASS: Boot_Rom -> Firmware handoff verified successfully!"
+    echo "✅ PASS: Boot_ROM -> Firmware handoff verified successfully!"
     exit 0
 else
     echo "❌ FAIL: Expected marker '$EXPECTED' was not found in output!" >&2

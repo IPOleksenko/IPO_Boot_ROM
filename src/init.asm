@@ -1,4 +1,4 @@
-; init.asm — Early initialization for IPO_Boot_Rom
+; init.asm — Early initialization for IPO_Boot_ROM
 ; Assembled with ORG 0xF800, executed in CS=0xF000 (Physical 0xFF800 / 0xFFFFF800)
 
 BITS 16
@@ -189,9 +189,9 @@ vga_print:
 ; =============================================================================
 ; Data / Strings (Stored in ROM)
 ; =============================================================================
-msg_banner      db "[IPO_Boot_Rom] Reset vector reached. Initializing system...", 10, 0
-msg_copying     db "[IPO_Boot_Rom] Copying Firmware from ROM (0xF000:0000) to RAM (0x0800:0000)...", 10, 0
-msg_fw_ok       db "[IPO_Boot_Rom] Firmware magic 'IPOF' validated. Jumping to 0x0800:0000...", 10, 0
-msg_fw_invalid  db "[IPO_Boot_Rom] ERROR: Firmware magic header mismatch!", 10, 0
-msg_halted      db "[IPO_Boot_Rom] System halted.", 10, 0
+msg_banner      db "[IPO_Boot_ROM] Reset vector reached. Initializing system...", 10, 0
+msg_copying     db "[IPO_Boot_ROM] Copying Firmware from ROM (0xF000:0000) to RAM (0x0800:0000)...", 10, 0
+msg_fw_ok       db "[IPO_Boot_ROM] Firmware magic 'IPOF' validated. Jumping to 0x0800:0000...", 10, 0
+msg_fw_invalid  db "[IPO_Boot_ROM] ERROR: Firmware magic header mismatch!", 10, 0
+msg_halted      db "[IPO_Boot_ROM] System halted.", 10, 0
 
