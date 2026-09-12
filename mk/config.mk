@@ -44,7 +44,14 @@ ASM_FLAGS := -f bin -I$(INC) -I$(SRC)
 # BIOS / Firmware binary to embed into ROM (optional: make run BIOS=/path/to/firmware.bin)
 BIOS     ?=
 FW       ?= $(BIOS)
-FW_BIN   ?= $(FW)
+FIRMWARE ?= $(FW)
+FW_BIN   ?= $(FIRMWARE)
+
+ifeq ($(FW_BIN),1)
+FW_BIN := ../IPO_Firmware/build/firmware.bin
+else ifeq ($(FW_BIN),default)
+FW_BIN := ../IPO_Firmware/build/firmware.bin
+endif
 
 # Target OS storage media (optional: make run OS=/path/to/disk.img)
 OS       ?=
