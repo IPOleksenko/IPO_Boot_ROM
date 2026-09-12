@@ -69,6 +69,12 @@ endif
 # Base QEMU flags for running Boot ROM
 QEMU_FLAGS := -M pc -m $(MEM) -bios $(TARGET_ROM) -serial stdio
 
+# Audio configuration for PC Speaker (matching IPO_OS)
+AUDIO ?= pa
+ifneq ($(AUDIO),none)
+QEMU_FLAGS += -audiodev $(AUDIO),id=pa -machine pcspk-audiodev=pa
+endif
+
 # If an OS storage media image is supplied, attach it as primary IDE master (disk 0x80)
 ifneq ($(OS_IMAGE),)
 QEMU_FLAGS += -drive format=raw,file=$(OS_IMAGE),if=ide,index=0
