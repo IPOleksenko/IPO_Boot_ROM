@@ -23,3 +23,4 @@ reset_vector:
 
     ; Verify that reset vector is exactly 16 bytes
     times 16 - ($ - reset_vector) db 0x90
+

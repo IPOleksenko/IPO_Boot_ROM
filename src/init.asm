@@ -194,3 +194,4 @@ msg_copying     db "[IPO_Boot_Rom] Copying Firmware from ROM (0xF000:0000) to RA
 msg_fw_ok       db "[IPO_Boot_Rom] Firmware magic 'IPOF' validated. Jumping to 0x0800:0000...", 10, 0
 msg_fw_invalid  db "[IPO_Boot_Rom] ERROR: Firmware magic header mismatch!", 10, 0
 msg_halted      db "[IPO_Boot_Rom] System halted.", 10, 0
+

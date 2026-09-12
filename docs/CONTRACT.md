@@ -61,3 +61,4 @@ This far jump reloads `CS` with base `0x000F0000`, allowing normal 16-bit real-m
 ## 5. Verification & Testing
 - `make`: Compiles `build/bootrom.bin` (standalone test image with embedded stub firmware) and `build/bootrom_template.bin` (image with empty firmware slot for system integration).
 - `make test`: Executes QEMU headless with `-bios build/bootrom.bin -display none -serial stdio` and verifies that the firmware stub receives control and logs to COM1.
+
