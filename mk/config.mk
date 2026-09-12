@@ -65,6 +65,15 @@ QEMU_FLAGS := -M pc -m $(MEM) -bios $(TARGET_ROM) -serial stdio
 # If an OS storage media image is supplied, attach it as primary IDE master (disk 0x80)
 ifneq ($(OS_IMAGE),)
 QEMU_FLAGS += -drive format=raw,file=$(OS_IMAGE),if=ide,index=0
+# Optional secondary disk (e.g. IPO_OS disk pool)
+DISK ?=
+ifneq ($(DISK),)
+QEMU_FLAGS += -drive format=raw,file=$(DISK),if=ide,index=1
+else ifneq ($(wildcard $(dir $(OS_IMAGE))disk.img),)
+QEMU_FLAGS += -drive format=raw,file=$(dir $(OS_IMAGE))disk.img,if=ide,index=1
+else ifneq ($(wildcard $(dir $(OS_IMAGE))../build/disk.img),)
+QEMU_FLAGS += -drive format=raw,file=$(dir $(OS_IMAGE))../build/disk.img,if=ide,index=1
+endif
 endif
 
 QEMU_FLAGS += $(QEMU_EXTRA)
