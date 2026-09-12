@@ -41,30 +41,30 @@ ASM_FLAGS := -f bin -I$(INC) -I$(SRC)
 #                 EMULATION RUN ARGUMENTS
 # =============================================================================
 
-# BIOS / Firmware binary to embed into ROM
-# (passed as argument: make run BIOS=/path/to/firmware.bin or FW=...)
-FW_DEFAULT := $(if $(wildcard ../IPO_Firmware/build/firmware.bin),../IPO_Firmware/build/firmware.bin,$(BUILD)/stub_firmware.bin)
-FW         ?= $(FW_DEFAULT)
-BIOS       ?= $(FW)
-FW_BIN     ?= $(BIOS)
+# BIOS / Firmware binary to embed into ROM (optional: make run BIOS=/path/to/firmware.bin)
+BIOS     ?=
+FW       ?= $(BIOS)
+FW_BIN   ?= $(FW)
 
-# Target OS storage media (passed as argument: make run OS=/path/to/os.img)
-OS         ?= ../build/IPO_OS.img
-OS_IMAGE   ?= $(OS)
-DISK1      ?= $(wildcard ../build/disk.img)
-CDROM      ?= $(wildcard ../build/disk.iso)
-MEM        ?= 8192
+# Target OS storage media (optional: make run OS=/path/to/disk.img)
+OS       ?=
+OS_IMAGE ?= $(OS)
+MEM      ?= 8192
 
-# Emulates booting specifically from storage media (IDE disk index 0)
-QEMU_FLAGS := -M pc -m $(MEM) -bios $(RUN_ROM) \
-              -drive format=raw,file=$(OS_IMAGE),if=ide,index=0
-
-ifneq ($(DISK1),)
-QEMU_FLAGS += -drive format=raw,file=$(DISK1),if=ide,index=1
+# Determine active ROM for emulation:
+# If BIOS/Firmware is provided, build RUN_ROM; otherwise run standalone BOOTROM_BIN
+ifeq ($(FW_BIN),)
+TARGET_ROM := $(BOOTROM_BIN)
+else
+TARGET_ROM := $(RUN_ROM)
 endif
 
-ifneq ($(CDROM),)
-QEMU_FLAGS += -cdrom $(CDROM)
+# Base QEMU flags for running Boot ROM
+QEMU_FLAGS := -M pc -m $(MEM) -bios $(TARGET_ROM) -serial stdio
+
+# If an OS storage media image is supplied, attach it as primary IDE master (disk 0x80)
+ifneq ($(OS_IMAGE),)
+QEMU_FLAGS += -drive format=raw,file=$(OS_IMAGE),if=ide,index=0
 endif
 
-QEMU_FLAGS += -serial stdio $(QEMU_EXTRA)
+QEMU_FLAGS += $(QEMU_EXTRA)

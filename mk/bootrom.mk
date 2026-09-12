@@ -16,7 +16,7 @@ $(BUILD)/stub_firmware.bin: $(TESTS)/stub_firmware.bin.asm $(INC)/contract.inc
 	@mkdir -p $(BUILD)
 	$(ASM) $(ASM_FLAGS) $(TESTS)/stub_firmware.bin.asm -o $@
 
-# Standalone testable ROM: Boot_Rom + embedded Stub Firmware
+# Standalone testable ROM: Boot_Rom + embedded internal stub payload
 $(BOOTROM_BIN): $(BUILD)/init.bin $(BUILD)/reset.bin $(BUILD)/stub_firmware.bin $(TOOLS)/build_rom.sh
 	$(TOOLS)/build_rom.sh $(ROMSIZE) $(FW_OFFSET) $(BUILD)/stub_firmware.bin $(INIT_OFFSET) $(BUILD)/init.bin $(BUILD)/reset.bin $@
 
@@ -26,13 +26,9 @@ $(BOOTROM_TMPL): $(BUILD)/init.bin $(BUILD)/reset.bin $(TOOLS)/build_rom.sh
 
 # Run ROM: Builds complete ROM embedding the specified BIOS/Firmware
 $(RUN_ROM): $(BUILD)/init.bin $(BUILD)/reset.bin $(TOOLS)/build_rom.sh
-	@if [ ! -f "$(FW_BIN)" ] && [ "$(FW_BIN)" = "../IPO_Firmware/build/firmware.bin" ]; then \
-		echo "[IPO_Boot_Rom] Firmware binary not found, building IPO_Firmware..."; \
-		$(MAKE) -C ../IPO_Firmware; \
-	fi
 	@if [ ! -f "$(FW_BIN)" ]; then \
 		echo "ERROR: Firmware binary '$(FW_BIN)' not found!" >&2; \
-		echo "Usage: make run BIOS=/path/to/firmware.bin OS=/path/to/disk.img" >&2; \
+		echo "Usage: make run BIOS=/path/to/firmware.bin [OS=/path/to/disk.img]" >&2; \
 		exit 1; \
 	fi
 	$(TOOLS)/build_rom.sh $(ROMSIZE) $(FW_OFFSET) $(FW_BIN) $(INIT_OFFSET) $(BUILD)/init.bin $(BUILD)/reset.bin $@
