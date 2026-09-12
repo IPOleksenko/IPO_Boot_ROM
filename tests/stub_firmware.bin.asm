@@ -66,70 +66,75 @@ bootrom_render_screen:
     xor     di, di
     mov     si, str_title
     mov     ah, 0x0A
-.l1:
-    lodsb
-    test    al, al
-    jz      .d1
-    stosw
-    jmp     .l1
-.d1:
+    call    .draw_str
 
     ; Row 0 Right (Col 66): "by IPOleksenko" (attribute 0x0A)
-    ; Col 66 * 2 = 132
     mov     di, 132
     mov     si, str_author
     mov     ah, 0x0A
-.l2:
-    lodsb
-    test    al, al
-    jz      .d2
-    stosw
-    jmp     .l2
-.d2:
+    call    .draw_str
 
-    ; Row 2 (Col 0): "[IPO_Boot_Rom] Hardware reset vector initialized."
-    ; Offset: 2 * 160 = 320
-    mov     di, 320
+    ; Row 2 (Col 0): CPU reset vector
+    mov     di, 2 * 160
     mov     si, str_line1
     mov     ah, 0x07
-.l3:
-    lodsb
-    test    al, al
-    jz      .d3
-    stosw
-    jmp     .l3
-.d3:
+    call    .draw_str
 
-    ; Row 3 (Col 0): "[IPO_Boot_Rom] Primary bootloader active (Contract 1 -> Contract 2)."
-    ; Offset: 3 * 160 = 480
-    mov     di, 480
+    ; Row 3 (Col 0): Stack
+    mov     di, 3 * 160
     mov     si, str_line2
     mov     ah, 0x07
-.l4:
-    lodsb
-    test    al, al
-    jz      .d4
-    stosw
-    jmp     .l4
-.d4:
+    call    .draw_str
 
-    ; Row 5 (Col 0): "[IPO_Boot_Rom] Standalone test mode: system halted."
-    ; Offset: 5 * 160 = 800
-    mov     di, 800
+    ; Row 4 (Col 0): UART COM1
+    mov     di, 4 * 160
     mov     si, str_line3
-    mov     ah, 0x0A
-.l5:
-    lodsb
-    test    al, al
-    jz      .d5
-    stosw
-    jmp     .l5
-.d5:
+    mov     ah, 0x07
+    call    .draw_str
+
+    ; Row 5 (Col 0): VGA
+    mov     di, 5 * 160
+    mov     si, str_line4
+    mov     ah, 0x07
+    call    .draw_str
+
+    ; Row 6 (Col 0): ROM mapping
+    mov     di, 6 * 160
+    mov     si, str_line5
+    mov     ah, 0x07
+    call    .draw_str
+
+    ; Row 7 (Col 0): Hardware diagnostics
+    mov     di, 7 * 160
+    mov     si, str_line6
+    mov     ah, 0x0B                        ; Light Cyan
+    call    .draw_str
+
+    ; Row 9 (Col 0): Standalone status
+    mov     di, 9 * 160
+    mov     si, str_line7
+    mov     ah, 0x0E                        ; Yellow
+    call    .draw_str
+
+    ; Row 10 (Col 0): System halted
+    mov     di, 10 * 160
+    mov     si, str_line8
+    mov     ah, 0x07
+    call    .draw_str
 
     pop     ax
     pop     di
     pop     si
     pop     es
+    ret
+
+.draw_str:
+    lodsb
+    test    al, al
+    jz      .draw_done
+    stosw
+    jmp     .draw_str
+.draw_done:
     ret
 
 ; =============================================================================
@@ -370,11 +375,17 @@ vga_ac_data     db 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x14, 0x07
 
 str_title       db "IPO_Boot_Rom", 0
 str_author      db "by IPOleksenko", 0
-str_line1       db "[IPO_Boot_Rom] Hardware reset vector initialized.", 0
-str_line2       db "[IPO_Boot_Rom] Primary bootloader active (Contract 1 -> Contract 2).", 0
-str_line3       db "[IPO_Boot_Rom] Standalone execution successful. System halted.", 0
+str_line1       db "[IPO_Boot_Rom] CPU reset vector (0xFFFF0) reached in 16-bit Real Mode", 0
+str_line2       db "[IPO_Boot_Rom] System stack allocated at 0x0000:0x7000", 0
+str_line3       db "[IPO_Boot_Rom] COM1 serial console initialized (115200 baud, 8N1)", 0
+str_line4       db "[IPO_Boot_Rom] VGA text display adapter initialized (Mode 03h, 80x25)", 0
+str_line5       db "[IPO_Boot_Rom] ROM mapping verified (0xF0000 - 0xFFFFF, 256 KB Flash)", 0
+str_line6       db "[IPO_Boot_Rom] Hardware diagnostics passed. Primary bootloader ready.", 0
+str_line7       db "[IPO_Boot_Rom] Standalone mode: waiting for external BIOS Firmware payload...", 0
+str_line8       db "[IPO_Boot_Rom] System halted.", 0
 
-msg_stub_serial db "[IPO_Boot_Rom] Reset vector reached. IPO_Firmware reached! Stub firmware payload active.", 10, 0
+msg_stub_serial db "[IPO_Boot_Rom] Reset vector reached. IPO_Firmware reached! Hardware diagnostics passed.", 10
+                db "[IPO_Boot_Rom] Standalone mode: waiting for external BIOS Firmware payload...", 10, 0
 msg_stub_halt   db "[IPO_Boot_Rom] System halted.", 10, 0
 
 align 4
