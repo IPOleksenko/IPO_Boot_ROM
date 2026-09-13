@@ -4,6 +4,7 @@ sysroot
 .vscode/
 *.img
 *.inc
+!include/*.inc
 *.img
 *.o
 *.bin
