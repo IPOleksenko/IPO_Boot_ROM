@@ -2,9 +2,21 @@
 #                 BOOT ROM BUILD RULES
 # =============================================================================
 
+# All source files that init.asm %includes
+INIT_SRCS := $(SRC)/init.asm \
+             $(SRC)/payload_call.asm \
+             $(SRC)/car.asm \
+             $(SRC)/chipset.asm \
+             $(SRC)/mrc_440fx.asm \
+             $(SRC)/smbus.asm \
+             $(SRC)/mrc_q35.asm \
+             $(SRC)/pic.asm \
+             $(SRC)/pit.asm \
+             $(INC)/contract.inc
+
 bootrom: $(BOOTROM_BIN) $(BOOTROM_TMPL)
 
-$(BUILD)/init.bin: $(SRC)/init.asm $(SRC)/payload_call.asm $(INC)/contract.inc
+$(BUILD)/init.bin: $(INIT_SRCS)
 	@mkdir -p $(BUILD)
 	$(ASM) $(ASM_FLAGS) $(SRC)/init.asm -o $@
 
@@ -37,4 +49,32 @@ $(RUN_ROM): $(BUILD)/init.bin $(BUILD)/reset.bin $(TOOLS)/build_rom.sh
 test: $(BOOTROM_BIN)
 	$(TESTS)/run_qemu_test.sh $<
 
-.PHONY: bootrom test
+# Full unified BIOS integrating external BIOS / Firmware payload
+FULL_BIOS_BIN := $(BUILD)/full_bios.bin
+SPI_FLASH_BIN := $(BUILD)/spi_flash.bin
+FLASH_SIZE    ?= 4M
+
+full-bios: $(FULL_BIOS_BIN)
+
+$(FULL_BIOS_BIN): $(BUILD)/init.bin $(BUILD)/reset.bin $(TOOLS)/build_rom.sh
+	@fw_target="$(FW_BIN)"; \
+	if [ -z "$$fw_target" ] || [ ! -f "$$fw_target" ]; then \
+		echo "ERROR: BIOS / Firmware binary not specified or not found!" >&2; \
+		echo "Usage: make full-bios BIOS=/path/to/bios.bin" >&2; \
+		exit 1; \
+	fi; \
+	$(TOOLS)/build_rom.sh $(ROMSIZE) $(FW_OFFSET) "$$fw_target" $(INIT_OFFSET) $(BUILD)/init.bin $(BUILD)/reset.bin $@
+
+spi-flash: $(SPI_FLASH_BIN)
+
+$(SPI_FLASH_BIN): $(BUILD)/init.bin $(BUILD)/reset.bin $(TOOLS)/build_rom.sh $(TOOLS)/package_bios.py
+	@fw_target="$(FW_BIN)"; \
+	if [ -z "$$fw_target" ] || [ ! -f "$$fw_target" ]; then \
+		echo "ERROR: BIOS / Firmware binary not specified or not found!" >&2; \
+		echo "Usage: make spi-flash BIOS=/path/to/bios.bin [FLASH_SIZE=4M/8M/16M]" >&2; \
+		exit 1; \
+	fi; \
+	$(TOOLS)/build_rom.sh $(ROMSIZE) $(FW_OFFSET) "$$fw_target" $(INIT_OFFSET) $(BUILD)/init.bin $(BUILD)/reset.bin $(FULL_BIOS_BIN); \
+	python3 $(TOOLS)/package_bios.py -i $(FULL_BIOS_BIN) -o $@ -s $(FLASH_SIZE)
+
+.PHONY: bootrom test full-bios spi-flash

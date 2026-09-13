@@ -7,6 +7,10 @@
 ;
 ; The far jump resets the hidden base of CS to 0xF000 * 16 = 0x000F0000,
 ; enabling normal 16-bit real mode execution in the 1MB address space.
+;
+; On both i440FX and Q35 chipsets, PAM registers default to 0x00 at reset,
+; which routes reads from 0xF0000-0xFFFFF to PCI/ROM. This means the far
+; jump successfully fetches code from ROM even before any chipset init.
 
 BITS 16
 ORG 0xFFF0
@@ -14,7 +18,7 @@ ORG 0xFFF0
 %include "contract.inc"
 
 reset_vector:
-    jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 bytes: EA 00 F8 00 F0
+    jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 bytes: EA 00 80 00 F0
 
     ; BIOS date string (8 bytes: MM/DD/YY) + system model byte + padding
     db      '09/12/26'                      ; 8 bytes
@@ -23,4 +27,3 @@ reset_vector:
 
     ; Verify that reset vector is exactly 16 bytes
     times 16 - ($ - reset_vector) db 0x90
-

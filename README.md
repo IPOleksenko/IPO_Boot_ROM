@@ -84,6 +84,24 @@ Embeds the firmware binary and attaches the storage media:
 make run BIOS=path/to/firmware.bin OS=path/to/disk.img
 ```
 
+### 5. Selecting Storage Interface (`DRIVE_TYPE`)
+You can choose the virtual storage bus controller for testing:
+```bash
+make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ide   # Default: Legacy IDE/PATA
+make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ahci  # Modern SATA AHCI
+make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=usb   # USB 2.0 Flash Drive (EHCI BOT)
+```
+
+### 6. Packaging for Physical SPI Flash
+Build a full unified ROM or a full-sized flash image ready for a physical SPI programmer:
+```bash
+# Build unified 256KB BIOS ROM:
+make full-bios BIOS=path/to/firmware.bin
+
+# Build full-sized SPI Flash image (e.g. 4MB, 8MB, 16MB) padded with 0xFF:
+make spi-flash BIOS=path/to/firmware.bin FLASH_SIZE=4M
+```
+
 ### 🔊 Audio Configuration
 By default, QEMU connects the PC Speaker emulation to PulseAudio/PipeWire (`AUDIO=pa`). You can customize or disable the audio driver:
 ```bash
