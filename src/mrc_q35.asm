@@ -76,19 +76,21 @@ mrc_init_q35:
     ; =================================================================
     ; Step 2: Probe DIMMs via SPD EEPROM
     ; =================================================================
-    ; Clear the DIMM info table and total RAM accumulator
+    ; Clear the DIMM info table and total RAM accumulator in CAR
+    mov     ax, CAR_STACK_SEG
+    mov     es, ax
     xor     eax, eax
-    mov     [mrc_total_ram_mb], eax         ; Total RAM = 0
-    mov     [mrc_num_dimms], al             ; Detected DIMMs = 0
+    mov     [es:CAR_TOTAL_RAM_MB], eax      ; Total RAM = 0
+    mov     [es:CAR_NUM_DIMMS], al          ; Detected DIMMs = 0
 
     ; Clear DIMM size table (4 dwords = 16 bytes)
-    mov     [dimm_sizes + 0], eax
-    mov     [dimm_sizes + 4], eax
-    mov     [dimm_sizes + 8], eax
-    mov     [dimm_sizes + 12], eax
+    mov     [es:CAR_DIMM_SIZES + 0], eax
+    mov     [es:CAR_DIMM_SIZES + 4], eax
+    mov     [es:CAR_DIMM_SIZES + 8], eax
+    mov     [es:CAR_DIMM_SIZES + 12], eax
 
     ; Clear DIMM type table (4 bytes)
-    mov     [dimm_types + 0], eax
+    mov     [es:CAR_DIMM_TYPES + 0], eax
 
     ; ---- Probe each DIMM slot ----
     ; SI = DIMM index (0..3), used to index tables
@@ -99,9 +101,6 @@ mrc_init_q35:
     jge     .probe_done
 
     ; Compute slave address: SPD_ADDR_DIMM0 + SI
-    mov     bl, SPD_ADDR_DIMM0
-    add     bl, [cs:si]                     ; Can't add SI directly to BL
-    ; Corrected: manually compute BL = 0x50 + SI
     mov     bx, si
     add     bl, SPD_ADDR_DIMM0              ; BL = 0x50 + dimm_index
 
@@ -113,7 +112,7 @@ mrc_init_q35:
     jc      .dimm_not_present               ; CF=1 → no DIMM in this slot
 
     ; DIMM present — increment counter
-    inc     byte [mrc_num_dimms]
+    inc     byte [es:CAR_NUM_DIMMS]
 
     ; -----------------------------------------------------------------
     ; Read SPD byte 2: DRAM Device Type
@@ -124,141 +123,108 @@ mrc_init_q35:
     mov     bh, SPD_DRAM_TYPE               ; Offset 2
     call    smbus_read_byte
     jc      .dimm_read_error
-    mov     [dimm_types + si], al           ; Store DRAM type
+    mov     [es:CAR_DIMM_TYPES + si], al    ; Store DRAM type
+
+    ; Check if valid DRAM type
+    cmp     al, DRAM_TYPE_DDR2
+    je      .dimm_type_ok
+    cmp     al, DRAM_TYPE_DDR3
+    je      .dimm_type_ok
+    jmp     .dimm_read_error                ; Unknown type -> treat as error
+
+.dimm_type_ok:
+    ; DIMM present & valid type — increment counter
+    inc     byte [es:CAR_NUM_DIMMS]
+
+    cmp     al, DRAM_TYPE_DDR3
+    je      .read_ddr3_spd
 
     ; -----------------------------------------------------------------
-    ; Read SPD byte 4: Number of banks/density
-    ;   DDR2: bits [2:0] = number of banks (log2)
-    ;   DDR3: bits [6:4] = bank address bits, bits [3:0] = density
+    ; DDR2 JEDEC SPD Parsing (JESD21-C):
+    ;   Byte 3: Number of row addresses (e.g. 13, 14, 15)
+    ;   Byte 4: Number of column addresses (e.g. 9, 10, 11)
+    ;   Byte 5: Number of ranks (bits [2:0] = ranks - 1: 0=1 rank, 1=2 ranks)
+    ;   Byte 17: Number of banks (4 or 8)
     ; -----------------------------------------------------------------
-    mov     bh, SPD_NUM_BANKS               ; Offset 4
+    mov     bh, 3                           ; Rows
     call    smbus_read_byte
     jc      .dimm_read_error
-    mov     ch, al                          ; CH = banks/density byte
+    mov     cl, al
 
-    ; -----------------------------------------------------------------
-    ; Read SPD byte 5: Row/Column addressing
-    ;   DDR2: bits [7:5] = reserved, [4:3] = col bits-8, [2:0] = row bits-11
-    ;   DDR3: bits [5:3] = row bits-12, bits [2:0] = col bits-9
-    ; -----------------------------------------------------------------
-    mov     bh, SPD_ROW_COL                 ; Offset 5
+    mov     bh, 4                           ; Cols
     call    smbus_read_byte
     jc      .dimm_read_error
-    mov     cl, al                          ; CL = row/col byte
+    mov     ch, al
 
-    ; -----------------------------------------------------------------
-    ; Read SPD byte 8: Module type
-    ; -----------------------------------------------------------------
-    mov     bh, SPD_MOD_TYPE                ; Offset 8
+    mov     bh, 5                           ; Ranks
     call    smbus_read_byte
     jc      .dimm_read_error
-    ; AL = module type (informational, not used for size calc here)
+    and     al, 0x07
+    inc     al                              ; AL = ranks (1 or 2)
+    mov     dl, al
 
-    ; -----------------------------------------------------------------
-    ; Read SPD byte 6-7: Module organization / data width
-    ; -----------------------------------------------------------------
-    mov     bh, SPD_MOD_WIDTH_LO            ; Offset 6
+    mov     bh, 17                          ; Banks
     call    smbus_read_byte
     jc      .dimm_read_error
-    mov     dl, al                          ; DL = module org low
-
-    mov     bh, SPD_MOD_WIDTH_HI            ; Offset 7
-    call    smbus_read_byte
-    jc      .dimm_read_error
-    mov     dh, al                          ; DH = module org high
-
-    ; -----------------------------------------------------------------
-    ; Read CAS Latency (informational — needed for real HW timing)
-    ;   DDR2: byte 18,  DDR3: byte 14
-    ; -----------------------------------------------------------------
-    cmp     byte [dimm_types + si], DRAM_TYPE_DDR3
-    je      .read_cas_ddr3
-    mov     bh, SPD_CAS_DDR2               ; DDR2: offset 18
-    jmp     .read_cas
-.read_cas_ddr3:
-    mov     bh, SPD_CAS_DDR3               ; DDR3: offset 14
-.read_cas:
-    call    smbus_read_byte
-    jc      .dimm_read_error
-    ; AL = CAS latency bitmask (informational, stored but not used for QEMU)
+    test    al, al
+    jnz     .banks_ok
+    mov     al, 4                           ; Default 4 banks
+.banks_ok:
+    mov     dh, al
 
     pop     bx                              ; Restore slave address
 
-    ; -----------------------------------------------------------------
-    ; Calculate DIMM size (in MB)
-    ;
-    ; For DDR3 (simplified formula):
-    ;   Density bits = SPD[4] & 0x0F → capacity_mb lookup
-    ;   Ranks = ((SPD[5] >> 3) & 0x07) + 1
-    ;   Size = capacity_per_rank * ranks
-    ;
-    ; For DDR2 (simplified):
-    ;   Rows = (SPD[5] & 0x07) + 11
-    ;   Cols = ((SPD[5] >> 3) & 0x03) + 8
-    ;   Banks = SPD[4] & 0x07
-    ;   Width = SPD[6] (total data width, typically 64 bits / 8 = 8 bytes)
-    ;   Size = (2^rows * 2^cols * banks * width) / (1024*1024)
-    ;
-    ; For QEMU: SPD data is often minimal; use conservative defaults.
-    ; If size calc yields 0, default to 256 MB per detected DIMM.
-    ; -----------------------------------------------------------------
     push    si                              ; Save DIMM index
 
-    cmp     byte [dimm_types + si], DRAM_TYPE_DDR3
-    je      .calc_ddr3
-
-    ; ---- DDR2 Size Calculation ----
-    ; CL = SPD[5] (row/col), CH = SPD[4] (banks)
-    mov     al, cl
-    and     al, 0x07                        ; Row address bits offset (add 11)
-    add     al, 11                          ; AL = total row bits
-    mov     ah, cl
-    shr     ah, 3
-    and     ah, 0x03                        ; Col address bits offset (add 8)
-    add     ah, 8                           ; AH = total col bits
+    ; Validate rows (12..16) and cols (8..12)
+    cmp     cl, 12
+    jb      .default_size
+    cmp     cl, 16
+    ja      .default_size
+    cmp     ch, 8
+    jb      .default_size
+    cmp     ch, 12
+    ja      .default_size
 
     ; Total address bits = rows + cols
-    add     al, ah                          ; AL = row_bits + col_bits
+    movzx   eax, cl
+    movzx   ebx, ch
+    add     eax, ebx
+    sub     eax, 20                         ; Convert to MB units (subtract 20)
+    jl      .default_size
 
-    ; Number of banks
-    mov     ah, ch
-    and     ah, 0x07                        ; AH = number of banks (directly)
-    ; DDR2 SPD byte 4: actual count, not log2 for older SPD revisions
-    ; Common values: 4 or 8 banks
-    test    ah, ah
-    jnz     .ddr2_banks_ok
-    mov     ah, 4                           ; Default to 4 banks
-.ddr2_banks_ok:
-
-    ; Data width in bytes from SPD[6] (DL)
-    ; Typical: 64 (bits) → 8 bytes
-    movzx   edx, dl
-    test    edx, edx
-    jnz     .ddr2_width_ok
-    mov     edx, 8                          ; Default 8 bytes (64-bit bus)
-.ddr2_width_ok:
-
-    ; Size in bytes = (1 << address_bits) * banks * (width_bytes / 8)
-    ; But SPD[6] for DDR2 is total bits/8 already done differently...
-    ; Simplified: just use (1 << (row+col)) * banks * 8 / 1048576
-    ;   = (1 << (row+col - 20)) * banks * 8  for MB
-    ; If row+col < 20, result would be < 1MB — unlikely
-    movzx   ecx, al                        ; ECX = row_bits + col_bits
-    sub     ecx, 20                         ; Adjust for MB (divide by 1M = 2^20)
-    jle     .default_size                   ; If <= 0, something wrong
-
+    push    cx
+    mov     cl, al
     mov     eax, 1
-    shl     eax, cl                         ; EAX = 2^(rows+cols-20)
+    shl     eax, cl                         ; 2^(rows+cols-20)
+    pop     cx
 
-    movzx   ecx, ah                         ; ECX = number of banks
-    imul    eax, ecx                        ; EAX *= banks
-
-    ; Multiply by device width factor (assume x8 devices, 8 chips = 64-bit)
-    shl     eax, 3                          ; × 8 bytes per rank width
+    movzx   ebx, dh                         ; Banks
+    imul    eax, ebx
+    shl     eax, 3                          ; * 8 bytes (64-bit bus)
+    movzx   ebx, dl                         ; Ranks
+    imul    eax, ebx                        ; Total MB
 
     jmp     .store_size
 
-    ; ---- DDR3 Size Calculation ----
+.read_ddr3_spd:
+    ; -----------------------------------------------------------------
+    ; DDR3 JEDEC SPD Parsing (JESD21-C):
+    ;   Byte 4: bits [3:0] = density, bits [6:4] = banks
+    ;   Byte 5: bits [5:3] = ranks - 1
+    ; -----------------------------------------------------------------
+    mov     bh, 4                           ; Banks / density
+    call    smbus_read_byte
+    jc      .dimm_read_error
+    mov     ch, al
+
+    mov     bh, 5                           ; Ranks / addressing
+    call    smbus_read_byte
+    jc      .dimm_read_error
+    mov     cl, al
+
+    pop     bx                              ; Restore slave address
+    push    si                              ; Save DIMM index
 .calc_ddr3:
     ; DDR3 SPD byte 4: bits [3:0] = total SDRAM capacity per die
     ;   0001 = 256Mbit, 0010=512Mbit, 0011=1Gbit, 0100=2Gbit,
@@ -342,11 +308,11 @@ mrc_init_q35:
     push    esi
     movzx   esi, si
     shl     esi, 2                          ; ESI = SI * 4
-    mov     [dimm_sizes + esi], eax
+    mov     [es:CAR_DIMM_SIZES + esi], eax
     pop     esi
 
     ; Accumulate into total
-    add     [mrc_total_ram_mb], eax
+    add     [es:CAR_TOTAL_RAM_MB], eax
 
     jmp     .next_dimm
 
@@ -365,10 +331,12 @@ mrc_init_q35:
     ; =================================================================
     ; Step 3: Check if any DIMMs were detected
     ; =================================================================
-    cmp     byte [mrc_num_dimms], 0
+    cmp     byte [es:CAR_NUM_DIMMS], 0
     jne     .dimms_detected
 
-    ; No DIMMs detected via SPD — use fallback detection
+    ; No DIMMs detected via SPD — emit warning code 0x1F and fallback
+    mov     al, POST_WARN_SPD_FAIL
+    out     POST_PORT, al
     call    .fallback_detect_ram
     jmp     .program_mch
 
@@ -378,11 +346,11 @@ mrc_init_q35:
     ; Step 4: Program Q35 MCH Memory Controller Registers
     ; =================================================================
 .program_mch:
-    mov     eax, [mrc_total_ram_mb]
+    mov     eax, [es:CAR_TOTAL_RAM_MB]
     test    eax, eax
     jnz     .has_ram
     ; Still zero after fallback? Use absolute default
-    mov     dword [mrc_total_ram_mb], Q35_DEFAULT_RAM_MB
+    mov     dword [es:CAR_TOTAL_RAM_MB], Q35_DEFAULT_RAM_MB
     mov     eax, Q35_DEFAULT_RAM_MB
 .has_ram:
 
@@ -398,7 +366,7 @@ mrc_init_q35:
     mov     eax, Q35_PCI_ADDR | Q35_DRC
     call    pci_read_dword
     ; Check detected DRAM type from first present DIMM
-    cmp     byte [dimm_types], DRAM_TYPE_DDR3
+    cmp     byte [es:CAR_DIMM_TYPES], DRAM_TYPE_DDR3
     je      .set_drc_ddr3
     ; Default: DDR2
     and     eax, 0xFFFFFFF8                 ; Clear bits [2:0]
@@ -464,26 +432,139 @@ mrc_init_q35:
     call    pci_write_dword
 
     ; =================================================================
-    ; Step 5: SDRAM Initialization Sequence (simplified for QEMU)
+    ; Step 5: JEDEC DDR2 Initialization Sequence
     ; =================================================================
-    ; QEMU's Q35 emulation does not require the full JEDEC SDRAM init
-    ; sequence (NOP → Precharge → Refresh → Mode Register Set → Normal).
-    ; The memory is already accessible once QEMU starts.
-    ;
-    ; For real Q35 hardware (rare corporate desktop chipset), the full
-    ; sequence would be:
-    ;   a. Enable NOP commands via DRC
-    ;   b. Issue All Banks Precharge
-    ;   c. Issue minimum 2 Auto-Refresh cycles
-    ;   d. Set Mode Register (CAS latency, burst length)
-    ;   e. Enable Normal Operation mode in DRC
-    ;
-    ; Since QEMU compatibility is the primary target, we skip the JEDEC
-    ; sequence and just ensure the controller registers are programmed.
-    ; The DRC "initialized" bit (set above) is sufficient for QEMU.
+    ; Standard JESD79-2 sequence for DDR2 SDRAM initialization:
+    ;   a. Delay >= 200 µs with CKE stable (power-up wait)
+    ;   b. Issue NOP command via DRC
+    ;   c. Issue Precharge All (PALL) command
+    ;   d. Issue EMRS(2) / EMRS(3)
+    ;   e. Issue EMRS(1) to enable DLL
+    ;   f. Issue MRS with DLL reset (bit 8 = 1)
+    ;   g. Delay >= 200 clocks (~200 µs) for DLL lock
+    ;   h. Issue Precharge All (PALL) command
+    ;   i. Issue 2x Auto-Refresh (CBR) cycles
+    ;   j. Issue MRS without DLL reset (bit 8 = 0)
+    ;   k. Issue EMRS(1) OCD default and exit
+    ;   l. Set DRC to Normal Operation mode (000b)
 
+    ; a. Power-up stabilization delay >= 200 µs
+    call    mrc_delay_200us
+
+    ; b. Issue NOP command (DIC = 001b = 0x10)
+    mov     dl, 0x10
+    call    .issue_drc_cmd
+
+    ; c. Issue Precharge All (DIC = 010b = 0x20)
+    mov     dl, 0x20
+    call    .issue_drc_cmd
+
+    ; d. Issue EMRS(2) / EMRS(3) (DIC = 011b = 0x30)
+    mov     dl, 0x30
+    call    .issue_drc_cmd
+
+    ; e. Issue EMRS(1) to enable DLL (DIC = 011b = 0x30)
+    mov     dl, 0x30
+    call    .issue_drc_cmd
+
+    ; f. Issue MRS with DLL reset (DIC = 011b = 0x30)
+    mov     dl, 0x30
+    call    .issue_drc_cmd
+
+    ; g. Wait >= 200 clocks (~200 µs) for DLL lock
+    call    mrc_delay_200us
+
+    ; h. Issue Precharge All (DIC = 010b = 0x20)
+    mov     dl, 0x20
+    call    .issue_drc_cmd
+
+    ; i. Issue 2x Auto-Refresh (CBR) cycles (DIC = 100b = 0x40)
+    mov     dl, 0x40
+    call    .issue_drc_cmd
+    mov     dl, 0x40
+    call    .issue_drc_cmd
+
+    ; j. Issue MRS (normal, DLL reset cleared) (DIC = 011b = 0x30)
+    mov     dl, 0x30
+    call    .issue_drc_cmd
+
+    ; k. Issue EMRS(1) OCD default and exit (DIC = 011b = 0x30)
+    mov     dl, 0x30
+    call    .issue_drc_cmd
+
+    ; l. Switch DRC to Normal Operation mode (DIC = 000b = 0x00)
+    mov     dl, 0x00
+    call    .issue_drc_cmd
+
+    ; Calculate total bytes from total MB (cap at 4095 MB to prevent 32-bit overflow)
+    mov     eax, [es:CAR_TOTAL_RAM_MB]
+    cmp     eax, 4095
+    jbe     .mb_to_bytes_ok
+    mov     eax, 4095
+.mb_to_bytes_ok:
+    shl     eax, 20                         ; Convert MB to bytes
+    mov     [es:CAR_TOTAL_RAM_BYTES], eax
+
+    ; =================================================================
+    ; Step 6: DRAM Pattern Sanity Test (0x55AA55AA / 0xAA55AA55)
+    ; =================================================================
+    ; Test DRAM access at physical address 0x1000 (safely above IVT)
+    xor     ax, ax
+    mov     es, ax
+
+    mov     dword [es:0x1000], 0x55AA55AA
+    wbinvd
+    cmp     dword [es:0x1000], 0x55AA55AA
+    jne     .dram_test_fail
+
+    mov     dword [es:0x1000], 0xAA55AA55
+    wbinvd
+    cmp     dword [es:0x1000], 0xAA55AA55
+    jne     .dram_test_fail
+
+    ; Clear test location
+    mov     dword [es:0x1000], 0
+    wbinvd
+
+    mov     al, POST_DRAM_OK                ; 0x17
+    out     POST_PORT, al
+    jmp     .dram_test_ok
+
+.dram_test_fail:
+    mov     al, POST_ERR_DRAM_FAIL          ; 0x4E
+    out     POST_PORT, al
+    cli
+    hlt
+    jmp     short $-2
+
+.dram_test_ok:
     pop     es
     popad
+    ret
+
+; Helper to issue DRC command (DIC in DL, bits [6:4])
+.issue_drc_cmd:
+    push    eax
+    push    ecx
+    mov     eax, Q35_PCI_ADDR | Q35_DRC
+    call    pci_read_dword
+    and     eax, ~0x00000070                ; Clear DIC bits [6:4]
+    movzx   ecx, dl
+    or      eax, ecx                        ; Set DIC
+    or      eax, 0x01                       ; Bit 0: DRAM enabled
+    mov     ecx, eax
+    mov     eax, Q35_PCI_ADDR | Q35_DRC
+    call    pci_write_dword
+
+    ; Dummy DRAM read cycle to latch command onto bus
+    push    es
+    xor     ax, ax
+    mov     es, ax
+    mov     eax, [es:0x0000]
+    pop     es
+    out     0x80, al                        ; Small settling delay on bus
+    pop     ecx
+    pop     eax
     ret
 
 ; =============================================================================
@@ -523,22 +604,17 @@ mrc_init_q35:
     movzx   eax, ax
     shr     eax, 4                          ; EAX = MB above 16 MB
     add     eax, 16                         ; Add the first 16 MB
-    mov     [mrc_total_ram_mb], eax
+    mov     [es:CAR_TOTAL_RAM_MB], eax
     jmp     .fallback_done
 
     ; -----------------------------------------------------------------
     ; Method 2: QEMU fw_cfg port (selector 0x0001 = RAM size in bytes)
-    ;   Port 0x510: write selector (16-bit)
-    ;   Port 0x511: read data bytes (little-endian, byte at a time)
-    ;   Returns RAM size as a 32-bit little-endian value in bytes.
     ; -----------------------------------------------------------------
 .try_fw_cfg:
-    ; Select the RAM size entry
     mov     dx, FW_CFG_PORT_SEL
     mov     ax, FW_CFG_ID_RAM_SIZE          ; Selector 0x0001
     out     dx, ax
 
-    ; Read 4 bytes (little-endian) from data port
     mov     dx, FW_CFG_PORT_DATA
     in      al, dx                          ; Byte 0 (LSB)
     mov     cl, al
@@ -549,27 +625,24 @@ mrc_init_q35:
     in      al, dx                          ; Byte 3 (MSB)
     mov     bh, al
 
-    ; Assemble into EAX: BX:CX = 32-bit RAM size in bytes
     movzx   eax, bx
     shl     eax, 16
     movzx   ecx, cx
     or      eax, ecx                        ; EAX = RAM size in bytes
 
-    ; Sanity check: must be >= 1 MB and <= 4 GB
     cmp     eax, 0x00100000                 ; >= 1 MB?
     jb      .use_default
-    ; Convert bytes to MB: shift right by 20
     shr     eax, 20                         ; EAX = RAM in MB
     test    eax, eax
     jz      .use_default
-    mov     [mrc_total_ram_mb], eax
+    mov     [es:CAR_TOTAL_RAM_MB], eax
     jmp     .fallback_done
 
     ; -----------------------------------------------------------------
     ; Method 3: Default — 128 MB
     ; -----------------------------------------------------------------
 .use_default:
-    mov     dword [mrc_total_ram_mb], Q35_DEFAULT_RAM_MB
+    mov     dword [es:CAR_TOTAL_RAM_MB], Q35_DEFAULT_RAM_MB
 
 .fallback_done:
     pop     dx
@@ -577,13 +650,17 @@ mrc_init_q35:
     ret
 
 ; =============================================================================
-; Data Section
+; mrc_delay_200us — Busy-wait >= 200 microseconds using I/O bus delay
 ; =============================================================================
-
-align 4
-mrc_total_ram_mb    dd 0            ; Total detected RAM in megabytes
-mrc_num_dimms       db 0            ; Number of DIMMs detected via SPD
-
-align 4
-dimm_sizes          dd 0, 0, 0, 0   ; Size of each DIMM in MB (indexed by slot)
-dimm_types          db 0, 0, 0, 0   ; DRAM type code per DIMM (from SPD byte 2)
+mrc_delay_200us:
+    push    cx
+    push    ax
+    mov     cx, 250
+.dloop:
+    in      al, 0x80
+    out     0x80, al
+    dec     cx
+    jnz     .dloop
+    pop     ax
+    pop     cx
+    ret

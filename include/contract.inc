@@ -40,7 +40,11 @@ FW_MAGIC            equ 0x464F5049
 
 ; Post-DRAM stack (used after MRC completes and DRAM is available)
 BOOT_STACK_SEG      equ 0x0000
-BOOT_STACK_PTR      equ 0x7000      ; SP=0x7000, stack grows down (0x6000-0x7000)
+BOOT_STACK_PTR      equ 0x7C00      ; SP=0x7C00, stack grows down (0x7000-0x7C00)
+
+; Firmware stack
+FW_STACK_SEG        equ 0x0000
+FW_STACK_PTR        equ 0x7C00      ; Below MBR load area
 
 ; MBR handover (Contract 3)
 MBR_SEG             equ 0x0000
@@ -57,6 +61,17 @@ CAR_BASE            equ 0x70000     ; Physical base address of CAR region
 CAR_SIZE            equ 0x8000      ; 32 KB
 CAR_STACK_SEG       equ 0x7000      ; SS segment for CAR stack
 CAR_STACK_PTR       equ 0x8000      ; SP offset (top of 32KB, grows down)
+
+; CAR Scratch Data Offsets (Segment CAR_STACK_SEG = 0x7000)
+; Safe writable memory in CPU cache prior to DRAM readiness
+CAR_CHIPSET         equ 0x0000      ; byte: detected chipset (0=unknown, 1=i440fx, 2=q35)
+CAR_SERIAL_INIT     equ 0x0001      ; byte: 1 = serial initialized
+CAR_SMBUS_BASE      equ 0x0002      ; word: SMBus I/O base port
+CAR_NUM_DIMMS       equ 0x0004      ; byte: number of DIMMs detected
+CAR_TOTAL_RAM_MB    equ 0x0008      ; dword: total RAM in megabytes
+CAR_TOTAL_RAM_BYTES equ 0x000C      ; dword: total RAM in bytes
+CAR_DIMM_SIZES      equ 0x0010      ; 4 x dword = 16 bytes
+CAR_DIMM_TYPES      equ 0x0020      ; 4 x byte  = 4 bytes
 
 ; MTRR MSR Addresses
 MSR_MTRR_PHYSBASE0  equ 0x200       ; Variable MTRR Physical Base 0
@@ -188,6 +203,11 @@ ICH9_SMBUS_PCI_ADDR equ 0x8000FB00  ; PCI Bus 0, Dev 31, Fn 3
 ICH9_SMBUS_BAR      equ 0x20        ; Base Address Register (I/O)
 ICH9_SMBUS_HOSTC    equ 0x40        ; Host Configuration
 
+; PIIX4 SMBus Controller — PCI 0:7.3 (for i440FX/440BX boards)
+PIIX4_SMBUS_PCI_ADDR equ 0x80003B00  ; PCI Bus 0, Dev 7, Fn 3
+PIIX4_SMBUS_BAR      equ 0x90        ; Base Address Register in PIIX4
+PIIX4_SMBUS_HOSTC    equ 0xD2        ; Host Configuration in PIIX4
+
 ; SMBus Register Offsets (from BAR base)
 SMBUS_HST_STS       equ 0x00        ; Host Status
 SMBUS_HST_CNT       equ 0x02        ; Host Control
@@ -266,9 +286,115 @@ PORT_A20_FAST       equ 0x92
 ; 12. Chipset Detection Result (stored in CAR/DRAM by chipset_detect)
 ; =============================================================================
 
-; Values for [detected_chipset] variable
+; Values for detected chipset
 CHIPSET_UNKNOWN     equ 0x00
 CHIPSET_I440FX      equ 0x01
 CHIPSET_Q35         equ 0x02
+
+; =============================================================================
+; 13. Scratch RAM Offsets (Segment 0x0000, safe conventional memory)
+; =============================================================================
+SCRATCH_SEG         equ 0x0000
+SCRATCH_CHIPSET     equ 0x0508      ; byte: detected chipset
+SCRATCH_MEM_FLAG    equ 0x0510      ; byte: 1 = memory already detected
+SCRATCH_TOTAL_RAM   equ 0x0514      ; dword: total RAM in bytes
+SCRATCH_RAM_1_16M   equ 0x0518      ; word: RAM 1-16MB in KB
+SCRATCH_RAM_ABOVE16 equ 0x051A      ; word: RAM above 16MB in 64KB blocks
+
+; Storage Device Registry in Scratch RAM
+SCRATCH_AHCI_FOUND  equ 0x0540      ; byte: 1 = AHCI controller detected
+SCRATCH_AHCI_BUS    equ 0x0541      ; byte: PCI bus
+SCRATCH_AHCI_DEVFN  equ 0x0542      ; byte: PCI dev/fn
+SCRATCH_AHCI_PORT_N equ 0x0543      ; byte: active boot port index
+SCRATCH_AHCI_BAR5   equ 0x0544      ; dword: AHCI ABAR physical base
+SCRATCH_AHCI_PORTS  equ 0x0548      ; dword: Implemented ports mask
+
+SCRATCH_USB_FOUND   equ 0x0550      ; byte: 1 = USB controller detected
+SCRATCH_USB_TYPE    equ 0x0551      ; byte: 1 = EHCI, 2 = xHCI
+SCRATCH_USB_BUS     equ 0x0552      ; byte: PCI bus
+SCRATCH_USB_DEVFN   equ 0x0553      ; byte: PCI dev/fn
+SCRATCH_USB_BAR0    equ 0x0554      ; dword: USB MMIO/IO Base
+
+SCRATCH_VGA_FOUND   equ 0x0560      ; byte: 1 = VGA controller detected
+SCRATCH_VGA_BUS     equ 0x0561      ; byte: PCI bus
+SCRATCH_VGA_DEVFN   equ 0x0562      ; byte: PCI dev/fn
+SCRATCH_VGA_ROMBAR  equ 0x0564      ; dword: Expansion ROM BAR
+
+SCRATCH_NVME_FOUND    equ 0x0580    ; byte: 1 = NVMe detected
+SCRATCH_NVME_BUS      equ 0x0581    ; byte: PCI bus
+SCRATCH_NVME_DEVFN    equ 0x0582    ; byte: PCI dev/fn
+SCRATCH_NVME_BAR0     equ 0x0584    ; dword: NVMe BAR0 MMIO address
+SCRATCH_NVME_NSID     equ 0x0588    ; dword: active Namespace ID (usually 1)
+SCRATCH_NVME_SEC_SIZE equ 0x058C    ; word: sector size in bytes (512)
+SCRATCH_NVME_SQ_TAIL  equ 0x058E    ; byte: IO SQ tail index
+SCRATCH_NVME_CQ_HEAD  equ 0x058F    ; byte: IO CQ head index
+SCRATCH_NVME_CQ_PHASE equ 0x0592    ; byte: IO CQ expected phase bit (1 or 0)
+SCRATCH_E820_COUNT    equ 0x0590    ; word: number of valid E820 entries
+SCRATCH_E820_TABLE    equ 0x0598    ; buffer: dynamically generated E820 table
+
+; Drive Types for INT 13h dispatch (stored in Scratch RAM)
+SCRATCH_DRV_TYPE_80 equ 0x0570      ; byte: 0=None, 1=ATA_PIO, 2=SATA_AHCI, 3=USB_BOT, 4=NVME
+SCRATCH_DRV_TYPE_81 equ 0x0571      ; byte
+SCRATCH_DRV_TYPE_82 equ 0x0572      ; byte
+SCRATCH_DRV_TYPE_83 equ 0x0573      ; byte
+
+DRV_TYPE_NONE       equ 0x00
+DRV_TYPE_ATA_PIO    equ 0x01
+DRV_TYPE_SATA_AHCI  equ 0x02
+DRV_TYPE_USB_BOT    equ 0x03
+DRV_TYPE_NVME       equ 0x04
+
+; Dedicated 4KB page-aligned NVMe queues in lower memory (0x3000-0x6FFF)
+NVME_ADMIN_SQ_ADDR  equ 0x3000
+NVME_ADMIN_CQ_ADDR  equ 0x4000
+NVME_IO_SQ_ADDR     equ 0x5000
+NVME_IO_CQ_ADDR     equ 0x6000
+
+; =============================================================================
+; 14. POST Diagnostic Port 0x80 Codes
+; =============================================================================
+POST_PORT           equ 0x80
+
+; Standard Boot_ROM milestones
+POST_RESET          equ 0x10        ; CPU Reset Vector reached (0xFFFFFFF0)
+POST_INIT_ENTRY     equ 0x11        ; Entered Boot_ROM initialization code
+POST_CAR_START      equ 0x12        ; Configuring CPU MTRRs for Cache-as-RAM
+POST_CAR_OK         equ 0x13        ; CAR stack active at 0x7000:0x8000
+POST_CHIPSET_PROBE  equ 0x14        ; Scanning PCI host bridge for chipset ID
+POST_CHIPSET_OK     equ 0x15        ; Chipset recognized (i440FX or Q35)
+POST_DRAM_START     equ 0x16        ; MRC initializing memory controllers
+POST_DRAM_OK        equ 0x17        ; DRAM test passed
+POST_CAR_TEARDOWN   equ 0x18        ; Cache flushed, stack moved to DRAM
+POST_PIC_PIT_OK     equ 0x19        ; Legacy 8259 PIC and 8254 PIT initialized
+POST_SERIAL_OK      equ 0x1A        ; COM1 UART initialized at 115200 baud
+POST_SHADOW_START   equ 0x1B        ; Copying ROM to Shadow RAM (0xF0000)
+POST_SHADOW_LOCK    equ 0x1C        ; PAM locked read-only
+POST_FW_VALIDATE    equ 0x1D        ; Checking Firmware header magic ('IPOF')
+POST_FW_JUMP        equ 0x1E        ; Jumping to Firmware entry point
+POST_WARN_SPD_FAIL  equ 0x1F        ; Warning: SPD read failed on SMBus, falling back to default
+
+; Standard Firmware milestones
+POST_FW_ENTRY       equ 0x20        ; Firmware entry point reached (0xF000:0x0004)
+POST_PCI_SCAN       equ 0x21        ; PCI bus enumeration completed
+POST_IVT_INIT       equ 0x22        ; Real-mode IVT installed
+POST_ACPI_INIT      equ 0x23        ; ACPI tables installed in EBDA
+POST_VGA_INIT       equ 0x24        ; Video initialized (VBIOS or native text mode)
+POST_A20_INIT       equ 0x25        ; Fast A20 Gate activated
+POST_MEM_MAP        equ 0x26        ; E820 / E801 memory map prepared
+POST_KBD_INIT       equ 0x27        ; 8042 PS/2 keyboard controller initialized
+POST_STORAGE_OK     equ 0x28        ; Storage controllers initialized
+POST_DISK_SPINUP_WAIT equ 0x29      ; Waiting for drive spin-up (ATA/AHCI)
+POST_CHAINLOAD      equ 0x30        ; Commenced drive scan for bootable media
+POST_MBR_FOUND      equ 0x31        ; Valid MBR signature 0xAA55 loaded at 0x7C00
+POST_BOOT_JUMP      equ 0xF0        ; Handing off control to OS Bootloader
+
+; Error codes
+POST_ERR_NO_CAR     equ 0x2E        ; CPU lacks MTRR support or CAR setup failed
+POST_ERR_UNKNOWN_CS equ 0x3E        ; Unrecognized PCI host bridge
+POST_ERR_DRAM_FAIL  equ 0x4E        ; DRAM memory test failed
+POST_ERR_FW_MAGIC   equ 0x7E        ; Firmware magic mismatch
+POST_ERR_NO_BOOT    equ 0xEE        ; No bootable media found
+
+SCRATCH_VBIOS_ACTIVE equ 0x0568     ; byte: 1 = external VBIOS executed
 
 %endif ; CONTRACT_INC

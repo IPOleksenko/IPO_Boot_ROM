@@ -34,41 +34,98 @@ smbus_init:
     push    eax
     push    ecx
     push    dx
+    push    es
+    push    bx
+
+    mov     bx, CAR_STACK_SEG
+    mov     es, bx
+    mov     word [es:CAR_SMBUS_BASE], 0
 
     ; -----------------------------------------------------------------
-    ; Step 1: Read SMBus BAR from PCI config register 0x20
-    ;   PCI address = ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_BAR
-    ;   BAR format: bits [15:5] = I/O base, bit 0 = I/O indicator
+    ; 1. Check if ICH9 SMBus is present (PCI 0:1F.3)
     ; -----------------------------------------------------------------
+    mov     eax, ICH9_SMBUS_PCI_ADDR
+    call    pci_read_dword          ; EAX = [DID | VID]
+    cmp     ax, 0xFFFF
+    je      .check_piix4
+    test    ax, ax
+    jz      .check_piix4
+
+    ; Found ICH9 SMBus! Read SMBus BAR (reg 0x20)
     mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_BAR
-    call    pci_read_dword          ; EAX = BAR value
+    call    pci_read_dword
     and     ax, 0xFFFE              ; Mask off bit 0 (I/O space indicator)
-    mov     [smbus_base_port], ax   ; Store the I/O base address
+    test    ax, ax
+    jnz     .ich9_have_bar
+    ; Assign default I/O base 0x0400 if unassigned
+    mov     ecx, 0x00000401
+    mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_BAR
+    call    pci_write_dword
+    mov     ax, 0x0400
+.ich9_have_bar:
+    mov     [es:CAR_SMBUS_BASE], ax
 
-    ; -----------------------------------------------------------------
-    ; Step 2: Enable SMBus Host Controller
-    ;   PCI reg 0x40 (ICH9_SMBUS_HOSTC), bit 0 = SMBus Host Enable
-    ;   Read-modify-write: set bit 0
-    ; -----------------------------------------------------------------
+    ; Enable SMBus Host Controller (PCI reg 0x40 bit 0)
     mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_HOSTC
-    call    pci_read_dword          ; EAX = Host Configuration
-    or      al, 0x01                ; Set bit 0: SMBus Host Enable
-    mov     ecx, eax                ; ECX = modified value
+    call    pci_read_dword
+    or      al, 0x01
+    mov     ecx, eax
     mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_HOSTC
-    call    pci_write_dword         ; Write back
+    call    pci_write_dword
 
-    ; -----------------------------------------------------------------
-    ; Step 3: Enable I/O Space in PCI Command Register
-    ;   PCI reg 0x04, bit 0 = I/O Space Enable
-    ;   Read-modify-write: set bit 0
-    ; -----------------------------------------------------------------
+    ; Enable I/O Space in PCI Command Register (reg 0x04 bit 0)
     mov     eax, ICH9_SMBUS_PCI_ADDR | 0x04
-    call    pci_read_dword          ; EAX = PCI Command/Status
-    or      al, 0x01                ; Set bit 0: I/O Space Enable
-    mov     ecx, eax                ; ECX = modified value
+    call    pci_read_dword
+    or      al, 0x01
+    mov     ecx, eax
     mov     eax, ICH9_SMBUS_PCI_ADDR | 0x04
-    call    pci_write_dword         ; Write back
+    call    pci_write_dword
+    jmp     .init_done
 
+.check_piix4:
+    ; -----------------------------------------------------------------
+    ; 2. Check if PIIX4 SMBus is present (PCI 0:7.3, i440FX/440BX boards)
+    ; -----------------------------------------------------------------
+    mov     eax, PIIX4_SMBUS_PCI_ADDR
+    call    pci_read_dword          ; EAX = [DID | VID]
+    cmp     ax, 0xFFFF
+    je      .init_done
+    test    ax, ax
+    jz      .init_done
+
+    ; Found PIIX4 SMBus! Read Base Address from reg 0x90
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_BAR
+    call    pci_read_dword
+    and     ax, 0xFFF0
+    test    ax, ax
+    jnz     .piix4_have_bar
+    ; Assign default I/O base 0x1000 if unassigned
+    mov     ecx, 0x00001001
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_BAR
+    call    pci_write_dword
+    mov     ax, 0x1000
+.piix4_have_bar:
+    mov     [es:CAR_SMBUS_BASE], ax
+
+    ; Enable PIIX4 Host Controller (PCI reg 0xD2: bit 0 = Host Enable, bit 1 = I/O Enable)
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_HOSTC
+    call    pci_read_dword
+    or      al, 0x03
+    mov     ecx, eax
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_HOSTC
+    call    pci_write_dword
+
+    ; Enable PCI I/O space in Command Register (reg 0x04 bit 0)
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | 0x04
+    call    pci_read_dword
+    or      al, 0x01
+    mov     ecx, eax
+    mov     eax, PIIX4_SMBUS_PCI_ADDR | 0x04
+    call    pci_write_dword
+
+.init_done:
+    pop     bx
+    pop     es
     pop     dx
     pop     ecx
     pop     eax
@@ -96,30 +153,32 @@ smbus_init:
 smbus_read_byte:
     push    cx
     push    dx
+    push    es
+    push    di
+
+    mov     di, CAR_STACK_SEG
+    mov     es, di
 
     ; -----------------------------------------------------------------
     ; Step 1: Load SMBus I/O base address
     ; -----------------------------------------------------------------
-    mov     dx, [smbus_base_port]
+    mov     dx, [es:CAR_SMBUS_BASE]
     test    dx, dx                  ; Sanity check: base must be non-zero
     jz      .error
 
     ; -----------------------------------------------------------------
     ; Step 2: Clear all host status bits
     ;   Write 0xFF to SMBUS_HST_STS (base+0) to clear any pending status.
-    ;   Status bits are Write-1-to-Clear (W1C).
     ; -----------------------------------------------------------------
-    ; DX already points to base+0 (SMBUS_HST_STS)
     mov     al, 0xFF
     out     dx, al
 
     ; -----------------------------------------------------------------
     ; Step 3: Set slave address with read bit
     ;   SMBUS_XMIT_SLVA (base+4): bits [7:1] = slave addr, bit 0 = R/W
-    ;   For read: (slave_addr << 1) | 1
     ; -----------------------------------------------------------------
-    lea     dx, [edx + SMBUS_XMIT_SLVA - SMBUS_HST_STS]
-                                    ; DX = base + 4
+    mov     dx, [es:CAR_SMBUS_BASE]
+    add     dx, SMBUS_XMIT_SLVA     ; DX = base + 4
     mov     al, bl                  ; AL = 7-bit slave address
     shl     al, 1                   ; Shift address into bits [7:1]
     or      al, 0x01                ; Set bit 0 = Read direction
@@ -129,32 +188,23 @@ smbus_read_byte:
     ; Step 4: Set command byte (register offset to read)
     ;   SMBUS_HST_CMD (base+3)
     ; -----------------------------------------------------------------
-    mov     dx, [smbus_base_port]
+    mov     dx, [es:CAR_SMBUS_BASE]
     add     dx, SMBUS_HST_CMD       ; DX = base + 3
     mov     al, bh                  ; AL = command/offset byte
     out     dx, al
 
     ; -----------------------------------------------------------------
     ; Step 5: Start the SMBus transaction
-    ;   SMBUS_HST_CNT (base+2): write START | BYTE_DATA
-    ;   START     = 0x40 (bit 6: start transaction)
-    ;   BYTE_DATA = 0x08 (bits [4:2] = 010b: Byte Data protocol)
-    ;   Combined  = 0x48
     ; -----------------------------------------------------------------
-    mov     dx, [smbus_base_port]
+    mov     dx, [es:CAR_SMBUS_BASE]
     add     dx, SMBUS_HST_CNT       ; DX = base + 2
     mov     al, SMBUS_CNT_START | SMBUS_CNT_BYTE_DATA  ; 0x48
     out     dx, al
 
     ; -----------------------------------------------------------------
     ; Step 6: Poll for transaction completion
-    ;   Read SMBUS_HST_STS (base+0) in a loop:
-    ;     - Wait until BUSY (bit 0) clears
-    ;     - Check ERROR (bit 2) or FAILED (bit 4) → error
-    ;     - Check INTR (bit 1) → success
-    ;   Timeout after 0xFFFF iterations to prevent infinite hang.
     ; -----------------------------------------------------------------
-    mov     dx, [smbus_base_port]   ; DX = base + 0 (SMBUS_HST_STS)
+    mov     dx, [es:CAR_SMBUS_BASE] ; DX = base + 0 (SMBUS_HST_STS)
     mov     cx, 0xFFFF              ; Timeout counter
 
 .poll_loop:
@@ -170,53 +220,39 @@ smbus_read_byte:
     test    al, SMBUS_STS_INTR      ; Bit 1: Interrupt (completion)
     jnz     .read_data              ; Transaction complete — read result
 
-    ; Still busy — decrement timeout and retry
     dec     cx
     jnz     .poll_loop
-
-    ; Timeout: fell through without completion
     jmp     .error
 
     ; -----------------------------------------------------------------
     ; Step 7: Read the data byte
-    ;   SMBUS_HST_D0 (base+5) holds the received byte
     ; -----------------------------------------------------------------
 .read_data:
-    mov     dx, [smbus_base_port]
+    mov     dx, [es:CAR_SMBUS_BASE]
     add     dx, SMBUS_HST_D0        ; DX = base + 5
     in      al, dx                  ; AL = data byte from slave
 
     ; -----------------------------------------------------------------
     ; Step 8: Clear host status for next transaction
-    ;   Write 0xFF to SMBUS_HST_STS (base+0) — W1C all bits
     ; -----------------------------------------------------------------
     push    ax                      ; Preserve data byte in AL
-    mov     dx, [smbus_base_port]   ; DX = base + 0
+    mov     dx, [es:CAR_SMBUS_BASE] ; DX = base + 0
     mov     al, 0xFF
     out     dx, al
     pop     ax                      ; Restore data byte
 
-    ; Success — clear carry flag
     clc
     jmp     .done
 
 .error:
-    ; Clear host status even on error (clean up for next attempt)
-    mov     dx, [smbus_base_port]
+    mov     dx, [es:CAR_SMBUS_BASE]
     mov     al, 0xFF
     out     dx, al
-
-    ; Set carry flag to indicate error
     stc
 
 .done:
+    pop     di
+    pop     es
     pop     dx
     pop     cx
     ret
-
-; =============================================================================
-; Data Section
-; =============================================================================
-
-align 2
-smbus_base_port     dw 0            ; SMBus I/O base address (from PCI BAR)

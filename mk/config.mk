@@ -52,7 +52,8 @@ FW_BIN   ?= $(FIRMWARE)
 # Target OS storage media (optional: make run OS=/path/to/disk.img)
 OS       ?=
 OS_IMAGE ?= $(OS)
-MEM      ?= 8192
+CPU      ?= pentium3
+MEM      ?= 512
 
 # Determine active ROM for emulation:
 # If Firmware is provided, build RUN_ROM; otherwise run standalone BOOTROM_BIN
@@ -66,7 +67,7 @@ endif
 MACHINE ?= pc
 
 # Base QEMU flags for running Boot ROM
-QEMU_FLAGS := -M $(MACHINE) -m $(MEM) -bios $(TARGET_ROM) -serial stdio
+QEMU_FLAGS := -M $(MACHINE) -cpu $(CPU) -m $(MEM) -bios $(TARGET_ROM) -serial stdio
 
 # Audio configuration for PC Speaker
 AUDIO ?= pa

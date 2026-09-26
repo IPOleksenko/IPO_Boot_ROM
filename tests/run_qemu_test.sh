@@ -19,7 +19,7 @@ echo "[test] Launching QEMU with -bios $ROM..."
 
 LOGFILE=$(mktemp)
 timeout -s KILL 3s qemu-system-i386 \
-    -M pc \
+    -M pc -cpu pentium3 \
     -bios "$ROM" \
     -display none \
     -serial stdio \

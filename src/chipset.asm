@@ -61,32 +61,31 @@ pci_config_read8:
 ; pci_config_write8 — Write an 8-bit value to PCI configuration space
 ;
 ; Input:
-;   EAX = PCI address (bus/dev/fn/reg encoded)
+;   EAX = PCI address (dword-aligned, or with byte offset in bits 1:0)
 ;   CL  = byte offset within the dword (0–3)
-;   CH  = value to write
+;   DL  = value to write
 ;
 ; Output: none
 ; Clobbers: none
 ; -----------------------------------------------------------------------------
 pci_config_write8:
-    push    edx
     push    eax
+    push    edx
 
     ; Write dword-aligned address with enable bit to CONFIG_ADDRESS
     and     eax, 0xFFFFFFFC         ; Force dword alignment (clear bits 1:0)
     or      eax, 0x80000000         ; Set enable bit 31
+    push    edx                     ; Save DL on stack
     mov     dx, PCI_CONFIG_ADDR     ; 0x0CF8
     out     dx, eax
 
-    pop     eax                     ; Restore original EAX
-
-    ; Calculate byte port: 0xCFC + byte offset (CL)
+    pop     eax                     ; AL = original DL (value to write)
     movzx   dx, cl                  ; DX = byte offset (0–3)
     add     dx, PCI_CONFIG_DATA     ; DX = 0x0CFC + offset
-    mov     al, ch                  ; AL = value to write
     out     dx, al                  ; Write the target byte
 
     pop     edx
+    pop     eax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -198,38 +197,57 @@ pci_config_write32:
 chipset_detect:
     push    eax
     push    cx
+    push    es
+
+    mov     ax, CAR_STACK_SEG
+    mov     es, ax
 
     ; ------------------------------------------------------------------
     ; Step 1: Read Device ID (register 0x02, 16-bit) from PCI 0:0.0
-    ;         Vendor ID is at 0x00 but both chipsets share VID 0x8086,
-    ;         so we identify by Device ID alone.
     ; ------------------------------------------------------------------
     mov     eax, I440FX_PCI_ADDR    ; 0x80000000 — Bus 0, Dev 0, Fn 0
-    or      eax, 0x00               ; Register 0x00 (contains VID:DID dword)
     call    pci_config_read32       ; EAX = [DID(31:16) | VID(15:0)]
     shr     eax, 16                 ; AX = Device ID
 
     ; ------------------------------------------------------------------
     ; Step 2: Match against known Device IDs
     ; ------------------------------------------------------------------
-    cmp     ax, I440FX_DID          ; 0x1237 — Intel i440FX
+    cmp     ax, I440FX_DID          ; 0x1237 — Intel i440FX (82441FX)
+    je      .found_i440fx
+    cmp     ax, 0x7190              ; 0x7190 — Intel 440BX (82443BX)
+    je      .found_i440fx
+    cmp     ax, 0x7192              ; 0x7192 — Intel 440ZX (82443ZX)
+    je      .found_i440fx
+    cmp     ax, 0x719A              ; 0x719A — Intel 440ZX-66 (82443ZX-66)
+    je      .found_i440fx
+    cmp     ax, 0x7180              ; 0x7180 — Intel 440LX (82443LX)
+    je      .found_i440fx
+    cmp     ax, 0x7181              ; 0x7181 — Intel 440EX (82443EX)
     je      .found_i440fx
 
     cmp     ax, Q35_DID             ; 0x29C0 — Intel Q35 MCH
     je      .found_q35
+    cmp     ax, 0x29B0              ; 0x29B0 — Intel Q33 MCH
+    je      .found_q35
+    cmp     ax, 0x29D0              ; 0x29D0 — Intel Q35 Express
+    je      .found_q35
 
     ; Unknown chipset
-    mov     byte [detected_chipset], CHIPSET_UNKNOWN
+    mov     al, CHIPSET_UNKNOWN
     jmp     .detect_done
 
 .found_i440fx:
-    mov     byte [detected_chipset], CHIPSET_I440FX
+    mov     al, CHIPSET_I440FX
     jmp     .detect_done
 
 .found_q35:
-    mov     byte [detected_chipset], CHIPSET_Q35
+    mov     al, CHIPSET_Q35
 
 .detect_done:
+    ; Store in CAR scratch RAM (safe before DRAM is active)
+    mov     [es:CAR_CHIPSET], al
+
+    pop     es
     pop     cx
     pop     eax
     ret
@@ -237,84 +255,50 @@ chipset_detect:
 ; =============================================================================
 ; PAM (Programmable Attribute Map) Register Management
 ; =============================================================================
-;
-; PAM0 controls the BIOS area 0xF0000–0xFFFFF.
-; Bits [5:4] of the PAM register select the routing mode:
-;   00 = Disabled  — reads and writes go to PCI/ROM
-;   01 = RE        — reads from DRAM (shadow), writes to PCI/ROM
-;   10 = WE        — reads from PCI/ROM, writes to DRAM
-;   11 = RE+WE     — reads and writes go to DRAM
-;
-; For ROM-to-DRAM shadowing:
-;   1. pam_open_write:   set bits [5:4] = 10 (WE) — reads ROM, writes DRAM
-;   2. (caller copies ROM content to shadow RAM)
-;   3. pam_lock_readonly: set bits [5:4] = 01 (RE) — reads DRAM, writes blocked
 
-; -----------------------------------------------------------------------------
-; pam_open_write — Open PAM0 for writes (reads from ROM, writes to DRAM)
-;
-; This enables the shadowing copy phase: CPU reads ROM at 0xF0000,
-; CPU writes land in DRAM at 0xF0000.
-;
-; Input:  [detected_chipset] must be set (call chipset_detect first)
-; Output: PAM0 register updated on the host bridge
-; Clobbers: none
-; -----------------------------------------------------------------------------
 pam_open_write:
     push    eax
     push    cx
 
-    ; Determine which PAM register offset to use
-    cmp     byte [detected_chipset], CHIPSET_Q35
+    ; Probe host bridge DID directly from PCI configuration space
+    mov     eax, I440FX_PCI_ADDR
+    call    pci_config_read32
+    shr     eax, 16
+    cmp     ax, Q35_DID
     je      .pam_wr_q35
 
-    ; ----- i440FX path (or unknown — default to i440FX PAM) -----
-    ; PAM0 register is at offset 0x59 on PCI 0:0.0
-    mov     eax, I440FX_PCI_ADDR    ; 0x80000000
-    or      eax, I440FX_PAM0        ; OR in register offset 0x59
-    mov     cl, (I440FX_PAM0 & 0x03) ; Byte offset within dword = 0x59 & 3 = 1
+    ; ----- i440FX path (PAM0 at offset 0x59 on PCI 0:0.0) -----
+    mov     eax, I440FX_PCI_ADDR
+    or      eax, I440FX_PAM0
+    mov     cl, (I440FX_PAM0 & 0x03) ; Byte offset = 1
     jmp     .pam_wr_do
 
 .pam_wr_q35:
-    ; PAM0 register is at offset 0x90 on PCI 0:0.0
-    mov     eax, Q35_PCI_ADDR       ; 0x80000000
-    or      eax, Q35_PAM0           ; OR in register offset 0x90
-    mov     cl, (Q35_PAM0 & 0x03)   ; Byte offset within dword = 0x90 & 3 = 0
+    ; ----- Q35 path (PAM0 at offset 0x90 on PCI 0:0.0) -----
+    mov     eax, Q35_PCI_ADDR
+    or      eax, Q35_PAM0
+    mov     cl, (Q35_PAM0 & 0x03)   ; Byte offset = 0
 
 .pam_wr_do:
-    ; Read current PAM0 value
     call    pci_config_read8        ; AL = current PAM0 value
-
-    ; Mask out bits [5:4], then set to WE (0x20)
-    ; WE = bit 5 set, bit 4 clear → reads from ROM, writes to DRAM
-    and     al, ~PAM_RW             ; Clear bits [5:4] (mask = ~0x30 = 0xCF)
+    and     al, ~PAM_RW             ; Clear bits [5:4] (mask = 0xCF)
     or      al, PAM_WE              ; Set bit 5 (WE = 0x20)
-    mov     ch, al                  ; CH = new value to write
-
-    ; Write updated PAM0 value back
+    mov     dl, al                  ; DL = new value to write
     call    pci_config_write8
 
     pop     cx
     pop     eax
     ret
 
-; -----------------------------------------------------------------------------
-; pam_lock_readonly — Lock PAM0 to read-only (reads from DRAM shadow)
-;
-; After shadowing is complete, this locks the region so:
-;   - Reads come from DRAM (the shadow copy)
-;   - Writes are blocked (go to PCI, effectively discarded)
-;
-; Input:  [detected_chipset] must be set
-; Output: PAM0 register updated on the host bridge
-; Clobbers: none
-; -----------------------------------------------------------------------------
 pam_lock_readonly:
     push    eax
     push    cx
 
-    ; Determine which PAM register offset to use
-    cmp     byte [detected_chipset], CHIPSET_Q35
+    ; Probe host bridge DID directly from PCI configuration space
+    mov     eax, I440FX_PCI_ADDR
+    call    pci_config_read32
+    shr     eax, 16
+    cmp     ax, Q35_DID
     je      .pam_ro_q35
 
     ; ----- i440FX path -----
@@ -330,25 +314,12 @@ pam_lock_readonly:
     mov     cl, (Q35_PAM0 & 0x03)   ; Byte offset = 0
 
 .pam_ro_do:
-    ; Read current PAM0 value
     call    pci_config_read8        ; AL = current PAM0 value
-
-    ; Mask out bits [5:4], then set to RE (0x10)
-    ; RE = bit 4 set, bit 5 clear → reads from DRAM shadow, writes blocked
     and     al, ~PAM_RW             ; Clear bits [5:4] (mask = 0xCF)
     or      al, PAM_RE              ; Set bit 4 (RE = 0x10)
-    mov     ch, al                  ; CH = new value to write
-
-    ; Write updated PAM0 value back
+    mov     dl, al                  ; DL = new value to write
     call    pci_config_write8
 
     pop     cx
     pop     eax
     ret
-
-; =============================================================================
-; Data Section
-; =============================================================================
-
-align 4
-detected_chipset    db CHIPSET_UNKNOWN  ; Set by chipset_detect

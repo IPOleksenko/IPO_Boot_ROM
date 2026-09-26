@@ -20,10 +20,13 @@ ORG 0xFFF0
 reset_vector:
     jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 bytes: EA 00 80 00 F0
 
-    ; BIOS date string (8 bytes: MM/DD/YY) + system model byte + padding
+    ; BIOS date string (8 bytes: MM/DD/YY) + system model byte + submodel + checksum
     db      '09/12/26'                      ; 8 bytes
     db      0xFC                            ; System model byte (PC-AT)
+    db      0x00                            ; Submodel byte
     db      0x00                            ; Checksum / padding byte
 
     ; Verify that reset vector is exactly 16 bytes
-    times 16 - ($ - reset_vector) db 0x90
+%if ($ - reset_vector) != 16
+    %error "Reset vector must be exactly 16 bytes!"
+%endif

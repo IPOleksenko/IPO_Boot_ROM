@@ -46,9 +46,11 @@ bootrom_init:
     call    chipset_detect
 
     ; 2b. Initialize DRAM via Memory Reference Code
-    cmp     byte [detected_chipset], CHIPSET_I440FX
+    mov     ax, CAR_STACK_SEG
+    mov     es, ax
+    cmp     byte [es:CAR_CHIPSET], CHIPSET_I440FX
     je      .mrc_440fx
-    cmp     byte [detected_chipset], CHIPSET_Q35
+    cmp     byte [es:CAR_CHIPSET], CHIPSET_Q35
     je      .mrc_q35
 
     ; Unknown chipset — skip MRC, hope DRAM works (QEMU fallback)
@@ -69,8 +71,28 @@ bootrom_init:
     jmp     .mrc_done
 
 .mrc_done:
+    ; Read detected parameters from CAR before teardown
+    mov     ax, CAR_STACK_SEG
+    mov     es, ax
+    mov     bl, [es:CAR_CHIPSET]
+    mov     ecx, [es:CAR_TOTAL_RAM_BYTES]
+
     ; 2c. Tear down CAR — move stack to real DRAM
     call    car_teardown
+
+    ; Clear Scratch RAM area (0x0000:0x0500 - 0x0000:0x05FF)
+    ; Ensures VGA cursor (0x0500) and device detection flags are zeroed on real hardware
+    xor     ax, ax
+    mov     es, ax
+    mov     di, 0x0500
+    mov     cx, 64                  ; 64 dwords = 256 bytes
+    xor     eax, eax
+    cld
+    rep     stosd
+
+    ; Store detected parameters in safe DRAM Scratch RAM (0x0000:0x0500+)
+    mov     [es:SCRATCH_CHIPSET], bl
+    mov     [es:SCRATCH_TOTAL_RAM], ecx
 
     ; 2d. Initialize PIC (8259A cascade mode)
     call    pic_init
@@ -104,48 +126,58 @@ halt_system:
 
 ; =============================================================================
 ; Early Serial Output (uses CAR stack — before full serial_init)
-; Minimal: polls TX ready, sends character. Used before PIC/PIT are configured.
 ; =============================================================================
 serial_print_early:
     push    si
     push    ax
     push    dx
+    push    cx
+    push    es
 
-    ; Quick COM1 setup: 115200 8N1 (same as serial_init but inline)
-    ; Only done once — check if already initialized
-    cmp     byte [serial_initialized], 1
+    mov     ax, CAR_STACK_SEG
+    mov     es, ax
+
+    cmp     byte [es:CAR_SERIAL_INIT], 1
     je      .early_loop
+
+    ; Test if UART hardware actually exists via scratch register (port 0x3FF)
+    mov     dx, COM1_PORT + 7       ; Scratch register
+    mov     al, 0xA5
+    out     dx, al
+    in      al, dx
+    cmp     al, 0xA5
+    jne     .early_done             ; No UART present, silently return
 
     ; Initialize COM1 at 115200 baud, 8N1
     mov     dx, COM1_PORT + 1
     xor     al, al
-    out     dx, al              ; Disable interrupts
+    out     dx, al                  ; Disable interrupts
 
     mov     dx, COM1_PORT + 3
     mov     al, 0x80
-    out     dx, al              ; Enable DLAB
+    out     dx, al                  ; Enable DLAB
 
     mov     dx, COM1_PORT + 0
     mov     al, 0x01
-    out     dx, al              ; Divisor low = 1 (115200 baud)
+    out     dx, al                  ; Divisor low = 1 (115200 baud)
 
     mov     dx, COM1_PORT + 1
     xor     al, al
-    out     dx, al              ; Divisor high = 0
+    out     dx, al                  ; Divisor high = 0
 
     mov     dx, COM1_PORT + 3
     mov     al, 0x03
-    out     dx, al              ; 8N1, disable DLAB
+    out     dx, al                  ; 8N1, disable DLAB
 
     mov     dx, COM1_PORT + 2
     mov     al, 0xC7
-    out     dx, al              ; Enable FIFO
+    out     dx, al                  ; Enable FIFO
 
     mov     dx, COM1_PORT + 4
     mov     al, 0x0B
-    out     dx, al              ; DTR + RTS + OUT2
+    out     dx, al                  ; DTR + RTS + OUT2
 
-    mov     byte [serial_initialized], 1
+    mov     byte [es:CAR_SERIAL_INIT], 1
 
 .early_loop:
     lodsb
@@ -161,6 +193,8 @@ serial_print_early:
     call    serial_tx_char_early
     jmp     .early_loop
 .early_done:
+    pop     es
+    pop     cx
     pop     dx
     pop     ax
     pop     si
@@ -169,15 +203,23 @@ serial_print_early:
 serial_tx_char_early:
     push    dx
     push    ax
+    push    cx
     mov     ah, al
     mov     dx, COM1_PORT + 5
+    mov     cx, 0xFFFF
 .wait:
     in      al, dx
     test    al, 0x20
-    jz      .wait
+    jnz     .ready
+    dec     cx
+    jnz     .wait
+    jmp     .timeout                ; Port timed out (no hanging!)
+.ready:
     mov     al, ah
     mov     dx, COM1_PORT
     out     dx, al
+.timeout:
+    pop     cx
     pop     ax
     pop     dx
     ret
@@ -186,22 +228,28 @@ serial_tx_char_early:
 ; Full Serial (COM1) Driver Routines (used after Phase 2)
 ; =============================================================================
 serial_init:
-    ; Already initialized by serial_print_early, just mark ready
-    mov     byte [serial_initialized], 1
     ret
 
 serial_tx_char:
     push    dx
     push    ax
+    push    cx
     mov     ah, al
     mov     dx, COM1_PORT + 5
+    mov     cx, 0xFFFF
 .wait_empty:
     in      al, dx
     test    al, 0x20
-    jz      .wait_empty
+    jnz     .send_byte
+    dec     cx
+    jnz     .wait_empty
+    jmp     .tx_done                ; Avoid hang on disconnected UART
+.send_byte:
     mov     al, ah
     mov     dx, COM1_PORT
     out     dx, al
+.tx_done:
+    pop     cx
     pop     ax
     pop     dx
     ret
@@ -299,8 +347,6 @@ vga_print:
 ; =============================================================================
 ; Data / Strings (Stored in ROM)
 ; =============================================================================
-serial_initialized  db 0
-
 msg_banner          db "[IPO_Boot_ROM] Hardware initialized. Shadowing firmware...", 10, 0
 msg_chipset_440fx   db "[IPO_Boot_ROM] Detected chipset: Intel i440FX (82441FX)", 10, 0
 msg_chipset_q35     db "[IPO_Boot_ROM] Detected chipset: Intel Q35 (MCH)", 10, 0

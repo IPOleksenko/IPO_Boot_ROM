@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-package_bios.py — Tool for packaging IPO_OS BIOS ROM into physical SPI Flash images
+package_bios.py — Tool for packaging Boot ROM into physical SPI Flash images
 
 Supports:
   1. Creating full-sized SPI Flash ROMs (512KB, 1MB, 2MB, 4MB, 8MB, 16MB) with 0xFF padding
@@ -14,6 +14,8 @@ import os
 import argparse
 
 VALID_FLASH_SIZES = {
+    "64K":  64 * 1024,
+    "128K": 128 * 1024,
     "256K": 256 * 1024,
     "512K": 512 * 1024,
     "1M":   1024 * 1024,
@@ -24,13 +26,15 @@ VALID_FLASH_SIZES = {
 }
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Package IPO_OS BIOS for physical SPI Flash chips")
-    parser.add_argument("-i", "--input", required=True, help="Input 256KB BIOS ROM (e.g. full_bios.bin)")
+    parser = argparse.ArgumentParser(description="Package Boot ROM for physical SPI Flash chips")
+    parser.add_argument("-i", "--input", required=True, help="Input BIOS ROM (e.g. bootrom.bin)")
     parser.add_argument("-o", "--output", required=True, help="Output physical SPI flash image")
     parser.add_argument("-s", "--size", default="4M", choices=list(VALID_FLASH_SIZES.keys()),
                         help="Target SPI Flash chip size (default: 4M)")
     parser.add_argument("-d", "--dump", default=None,
                         help="Optional existing SPI flash dump to patch top BIOS region into")
+    parser.add_argument("-c", "--checksum", action="store_true",
+                        help="Verify and adjust final byte so 64KB BIOS block sum mod 256 == 0")
     return parser.parse_args()
 
 def main():

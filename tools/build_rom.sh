@@ -28,6 +28,10 @@ python3 -c "import sys; sys.stdout.buffer.write(b'\xFF' * $ROMSIZE)" > "$OUTPUT_
 # 2. Embed Firmware payload at FW_OFFSET (if provided)
 if [ -n "$FW_BIN" ] && [ -f "$FW_BIN" ]; then
     fw_size=$(stat -c %s "$FW_BIN")
+    if [ $(( FW_OFFSET + fw_size )) -gt "$INIT_OFFSET" ]; then
+        echo "ERROR: Firmware payload ($fw_size bytes) overflows into Boot_ROM init (offset $INIT_OFFSET)!" >&2
+        exit 1
+    fi
     echo "[build_rom] Embedding Firmware: $FW_BIN ($fw_size bytes) at offset $FW_OFFSET (0x$(printf '%X' $FW_OFFSET))"
     dd if="$FW_BIN" of="$OUTPUT_ROM" bs=1 seek="$FW_OFFSET" conv=notrunc status=none
 else
@@ -35,12 +39,16 @@ else
 fi
 
 # 3. Embed Boot_ROM init code at INIT_OFFSET
+RESET_OFFSET=$(( ROMSIZE - 16 ))
 init_size=$(stat -c %s "$INIT_BIN")
+if [ $(( INIT_OFFSET + init_size )) -gt "$RESET_OFFSET" ]; then
+    echo "ERROR: Boot_ROM init ($init_size bytes) overflows into Reset Vector (offset $RESET_OFFSET)!" >&2
+    exit 1
+fi
 echo "[build_rom] Embedding Boot_ROM init: $INIT_BIN ($init_size bytes) at offset $INIT_OFFSET (0x$(printf '%X' $INIT_OFFSET))"
 dd if="$INIT_BIN" of="$OUTPUT_ROM" bs=1 seek="$INIT_OFFSET" conv=notrunc status=none
 
 # 4. Embed Reset Vector (last 16 bytes of ROM)
-RESET_OFFSET=$(( ROMSIZE - 16 ))
 reset_size=$(stat -c %s "$RESET_BIN")
 if [ "$reset_size" -ne 16 ]; then
     echo "ERROR: reset.bin must be exactly 16 bytes, got $reset_size bytes!" >&2
