@@ -6,32 +6,29 @@ ASM     := nasm
 QEMU    := qemu-system-i386
 
 # =============================================================================
+#                 TARGET FLASH CHIP GEOMETRY
+# =============================================================================
+
+# Physical SPI flash chip size (default: 4M for physical SPI flash like W25Q32;
+# use FLASH_SIZE=256K for vintage 256KB parallel flash / PLCC32 EEPROM)
+FLASH_SIZE  ?= 4M
+
+# =============================================================================
 #                 PROJECT DIRECTORIES
 # =============================================================================
 
 SRC     := src
 BUILD   := build
+OBJ     := $(BUILD)/.obj
 INC     := include
 TOOLS   := tools
-TESTS   := tests
 
 # =============================================================================
-#                 ROM GEOMETRY (256 KB)
+#                 OUTPUT ARTIFACT (Single unified ROM binary)
 # =============================================================================
 
-ROMSIZE     := 262144
-FW_OFFSET   := 196608  # 0x30000 (mapped to 0xFFFF0000 / alias 0xF000:0x0000)
-INIT_OFFSET := 229376  # 0x38000 (mapped to 0xFFFF8000 / alias 0xF000:0x8000)
-                        # Expanded from 0x3F800 to accommodate hardware init code
-                        # (CAR, MRC, PIC, PIT, chipset, shadow ROM routines)
-
-# =============================================================================
-#                 OUTPUT ARTIFACTS
-# =============================================================================
-
-BOOTROM_BIN  := $(BUILD)/bootrom.bin
-BOOTROM_TMPL := $(BUILD)/bootrom_template.bin
-RUN_ROM      := $(BUILD)/bootrom_run.bin
+BOOTROM_BIN := $(BUILD)/bootrom.bin
+TARGET_ROM  := $(BOOTROM_BIN)
 
 # =============================================================================
 #                 FLAGS
@@ -43,25 +40,17 @@ ASM_FLAGS := -f bin -I$(INC) -I$(SRC)
 #                 EMULATION RUN ARGUMENTS
 # =============================================================================
 
-# Firmware binary to embed into ROM (optional: make run BIOS=/path/to/firmware.bin)
-BIOS     ?=
-FW       ?= $(BIOS)
-FIRMWARE ?= $(FW)
-FW_BIN   ?= $(FIRMWARE)
+# Firmware binary to embed into ROM (optional: make run FIRMWARE=/path/to/firmware.bin)
+FIRMWARE ?=
+FW       ?= $(FIRMWARE)
+BIOS     ?= $(FW)
+FW_BIN   ?= $(BIOS)
 
 # Target OS storage media (optional: make run OS=/path/to/disk.img)
 OS       ?=
 OS_IMAGE ?= $(OS)
 CPU      ?= pentium3
 MEM      ?= 512
-
-# Determine active ROM for emulation:
-# If Firmware is provided, build RUN_ROM; otherwise run standalone BOOTROM_BIN
-ifeq ($(FW_BIN),)
-TARGET_ROM := $(BOOTROM_BIN)
-else
-TARGET_ROM := $(RUN_ROM)
-endif
 
 # QEMU machine type (default: pc = i440FX; use MACHINE=q35 for Q35)
 MACHINE ?= pc

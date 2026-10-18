@@ -1,4 +1,4 @@
-; stub_firmware.bin.asm — Minimal test firmware payload for IPO_Boot_ROM testing
+; payload.asm — Built-in firmware payload for IPO_Boot_ROM
 ; Loaded into RAM at 0x0800:0x0000 (Physical 0x08000)
 ; Initializes VGA text mode 03h and displays the standalone Boot ROM screen.
 
@@ -40,11 +40,6 @@ entry_point:
     mov     si, msg_stub_halt
     call    serial_print
 
-    ; Exit QEMU quickly if isa-debug-exit device is active (automated tests)
-    mov     dx, 0x501
-    mov     ax, 0x0001
-    out     dx, ax
-    out     dx, al
 
 .halt:
     hlt
@@ -390,8 +385,8 @@ msg_stub_halt   db "[IPO_Boot_ROM] System halted.", 10, 0
 
 align 4
 vga_dac_data:
-    incbin "tests/vga_dac.bin"
+    incbin "src/assets/vga_dac.bin"
 
 align 4
 vga_font_data:
-    incbin "tests/font8x16.bin"
+    incbin "src/assets/font8x16.bin"

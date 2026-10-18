@@ -13,24 +13,35 @@ import sys
 import os
 import argparse
 
-VALID_FLASH_SIZES = {
-    "64K":  64 * 1024,
-    "128K": 128 * 1024,
-    "256K": 256 * 1024,
-    "512K": 512 * 1024,
-    "1M":   1024 * 1024,
-    "2M":   2 * 1024 * 1024,
-    "4M":   4 * 1024 * 1024,
-    "8M":   8 * 1024 * 1024,
-    "16M":  16 * 1024 * 1024
-}
+def parse_size(val):
+    if isinstance(val, int):
+        return val
+    s = str(val).strip()
+    if s.lower().startswith("0x"):
+        return int(s, 16)
+    s_upper = s.upper()
+    multipliers = [
+        ("GIB", 1024**3), ("MIB", 1024**2), ("KIB", 1024),
+        ("GB", 1024**3),  ("MB", 1024**2),  ("KB", 1024),
+        ("G", 1024**3),   ("M", 1024**2),   ("K", 1024),
+        ("BYTES", 1),     ("BYTE", 1),      ("B", 1),
+    ]
+    for suffix, mult in multipliers:
+        if s_upper.endswith(suffix):
+            num_part = s_upper[:-len(suffix)].strip()
+            if "." in num_part:
+                return int(float(num_part) * mult)
+            return int(num_part) * mult
+    if "." in s:
+        return int(float(s))
+    return int(s)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Package Boot ROM for physical SPI Flash chips")
     parser.add_argument("-i", "--input", required=True, help="Input BIOS ROM (e.g. bootrom.bin)")
     parser.add_argument("-o", "--output", required=True, help="Output physical SPI flash image")
-    parser.add_argument("-s", "--size", default="4M", choices=list(VALID_FLASH_SIZES.keys()),
-                        help="Target SPI Flash chip size (default: 4M)")
+    parser.add_argument("-s", "--size", default="4M",
+                        help="Target SPI Flash chip size (e.g. 4M, 2M, 3M, 384K, 0x400000; default: 4M)")
     parser.add_argument("-d", "--dump", default=None,
                         help="Optional existing SPI flash dump to patch top BIOS region into")
     parser.add_argument("-c", "--checksum", action="store_true",
@@ -39,7 +50,11 @@ def parse_args():
 
 def main():
     args = parse_args()
-    target_size = VALID_FLASH_SIZES[args.size]
+    try:
+        target_size = parse_size(args.size)
+    except Exception as e:
+        print(f"ERROR: Invalid flash size '{args.size}': {e}", file=sys.stderr)
+        sys.exit(1)
 
     if not os.path.isfile(args.input):
         print(f"ERROR: Input BIOS file '{args.input}' not found!", file=sys.stderr)

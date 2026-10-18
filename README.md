@@ -47,9 +47,6 @@ Install all necessary build tools and dependencies:
 # Compile Boot ROM binaries and construct ROM images
 make
 
-# Run automated headless verification tests
-make test
-
 # Clean all build artifacts
 make clean
 ```
@@ -69,7 +66,7 @@ make run
 ### 2. Running with an External Firmware Binary
 Embeds a firmware binary at offset `0x30000` (`0xF000:0000`) and transfers control to it:
 ```bash
-make run BIOS=path/to/firmware.bin
+make run FIRMWARE=path/to/firmware.bin
 ```
 
 ### 3. Running with an Attached Storage Disk
@@ -81,22 +78,33 @@ make run OS=path/to/disk.img
 ### 4. Running with Firmware and Storage Media
 Embeds the firmware binary and attaches the storage media:
 ```bash
-make run BIOS=path/to/firmware.bin OS=path/to/disk.img
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img
 ```
 
 ### 5. Selecting Storage Interface (`DRIVE_TYPE`)
 You can choose the virtual storage bus controller for testing:
 ```bash
-make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ide   # Default: Legacy IDE/PATA
-make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ahci  # Modern SATA AHCI
-make run BIOS=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=usb   # USB 2.0 Flash Drive (EHCI BOT)
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ide   # Default: Legacy IDE/PATA
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ahci  # Modern SATA AHCI
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=usb   # USB 2.0 Flash Drive (EHCI BOT)
 ```
 
-### 6. Packaging for Physical SPI Flash
-Build a full-sized flash image ready for a physical SPI programmer:
+### 6. Packaging for Physical Hardware & SPI Flash
+`make` generates a single unified binary `build/bootrom.bin` ready for physical hardware. Both standard and arbitrary non-standard sizes are supported:
 ```bash
-# Build full-sized SPI Flash image (e.g. 4MB, 8MB, 16MB) padded with 0xFF:
-make spi-flash FLASH_SIZE=4M
+# Default build generates a 4MB flash image ready for physical SPI flash chips:
+make
+
+# Standard and non-standard sizes supported:
+make FLASH_SIZE=256K      # Vintage PLCC-32 / DIP-32 parallel flash (e.g. 28F020 / SST39SF020)
+make FLASH_SIZE=64K       # Minimal 64KB EPROM (e.g. 27C512)
+make FLASH_SIZE=384K      # Non-standard 384KB size
+make FLASH_SIZE=1.5M      # Decimal sizes (1.5 MB = 1536 KB)
+make FLASH_SIZE=3M        # Non-power-of-two (3 MB)
+make FLASH_SIZE=4M        # Standard 4MB SPI Flash (Winbond W25Q32, default)
+make FLASH_SIZE=8M        # 8MB SPI Flash (W25Q64)
+make FLASH_SIZE=16M       # 16MB SPI Flash (W25Q128)
+make FLASH_SIZE=0x400000  # Hexadecimal byte notation
 ```
 
 ### 🔊 Audio Configuration
@@ -113,11 +121,7 @@ make run AUDIO=none ...   # Disable audio connection
 
 | File | Size | Description |
 | :--- | :--- | :--- |
-| `build/bootrom.bin` | 262,144 B | Complete 256 KB ROM image with internal diagnostic payload for standalone testing |
-| `build/bootrom_template.bin` | 262,144 B | 256 KB ROM template with empty (0xFF) firmware slot ready for external payloads |
-| `build/bootrom_run.bin` | 262,144 B | Dynamically generated ROM embedding the specified external firmware |
-| `build/init.bin` | ~600 B | Assembled early initialization code (mapped to `0xF000:0xF800`) |
-| `build/reset.bin` | 16 B | Hardware reset vector code (mapped to `0xFFFF:0x0000` / `0xF000:0xFFF0`) |
+| `build/bootrom.bin` | Configurable (`FLASH_SIZE`, default 4 MB / 4,194,304 B) | Single unified ROM image ready for physical SPI flash programming (`flashrom`) and QEMU emulation |
 
 ---
 
@@ -179,14 +183,14 @@ At the completion of Boot ROM initialization, control is transferred to the firm
 > ```
 
 ```bash
-# Build full SPI flash image padded to chip size (e.g. 4MB / 8MB):
-make spi-flash BIOS=path/to/firmware.bin FLASH_SIZE=4M
+# Build ROM image (default 4MB, or specify FLASH_SIZE):
+make FLASH_SIZE=4M
 
 # Write to physical SPI Flash via CH341A external programmer:
-flashrom -p ch341a_spi -w build/spi_flash.bin
+flashrom -p ch341a_spi -w build/bootrom.bin
 
 # Or write via Raspberry Pi SPI header:
-flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000 -w build/spi_flash.bin
+flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000 -w build/bootrom.bin
 ```
 
 ---

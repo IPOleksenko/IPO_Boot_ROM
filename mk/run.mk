@@ -12,7 +12,7 @@ endif
 ifneq ($(FW_BIN),)
 	@echo "================================================================="
 	@echo "[IPO_Boot_ROM] Launching QEMU from hardware reset vector"
-	@echo "[IPO_Boot_ROM] Embedded BIOS: $(FW_BIN)"
+	@echo "[IPO_Boot_ROM] Embedded Firmware: $(FW_BIN)"
 ifneq ($(OS_IMAGE),)
 	@echo "[IPO_Boot_ROM] Booting OS from storage media: $(OS_IMAGE)"
 endif
@@ -20,8 +20,8 @@ endif
 else
 	@echo "================================================================="
 	@echo "[IPO_Boot_ROM] Launching QEMU with Boot ROM (standalone)"
-	@echo "[IPO_Boot_ROM] Tip: To embed a BIOS and boot an OS, use:"
-	@echo "[IPO_Boot_ROM]      make run BIOS=path/to/fw.bin [OS=path/to/os.img]"
+	@echo "[IPO_Boot_ROM] Tip: To embed a firmware payload and boot an OS, use:"
+	@echo "[IPO_Boot_ROM]      make run FIRMWARE=path/to/fw.bin [OS=path/to/os.img]"
 	@echo "================================================================="
 endif
 	$(QEMU) $(QEMU_FLAGS)

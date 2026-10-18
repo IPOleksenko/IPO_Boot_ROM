@@ -11,4 +11,4 @@ include mk/clean.mk
 
 all: bootrom
 
-.PHONY: all bootrom run test clean
+.PHONY: all bootrom run clean
