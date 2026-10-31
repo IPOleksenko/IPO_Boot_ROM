@@ -19,7 +19,7 @@ FLASH_SIZE  ?= 4M
 
 SRC     := src
 BUILD   := build
-OBJ     := $(BUILD)/.obj
+BIN     := $(BUILD)/.bin
 INC     := include
 TOOLS   := tools
 

@@ -17,7 +17,7 @@ Jump to Real-Mode ROM Base (jmp 0xF000:0x8000)
   ▼
 Low-Level Hardware Initialization
   ├─ Phase 1: Cache-as-RAM (CAR) setup via MTRRs (stack at 0x7000:0x8000)
-  ├─ Phase 2: Host Chipset Detection (i440FX vs Q35 via PCI probe)
+  ├─ Phase 2: Host Chipset Detection via PCI probe
   ├─ Phase 3: Memory Reference Code (MRC) DRAM controller training
   ├─ Phase 4: CAR teardown, system stack relocated to DRAM (0x0000:0x7000)
   ├─ Phase 5: Cascaded 8259A PIC & 8254 PIT (18.2 Hz) timer configuration
@@ -96,14 +96,14 @@ make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=usb   # US
 make
 
 # Standard and non-standard sizes supported:
-make FLASH_SIZE=256K      # Vintage PLCC-32 / DIP-32 parallel flash (e.g. 28F020 / SST39SF020)
-make FLASH_SIZE=64K       # Minimal 64KB EPROM (e.g. 27C512)
+make FLASH_SIZE=256K      # 256KB parallel flash
+make FLASH_SIZE=64K       # Minimal 64KB ROM
 make FLASH_SIZE=384K      # Non-standard 384KB size
 make FLASH_SIZE=1.5M      # Decimal sizes (1.5 MB = 1536 KB)
 make FLASH_SIZE=3M        # Non-power-of-two (3 MB)
-make FLASH_SIZE=4M        # Standard 4MB SPI Flash (Winbond W25Q32, default)
-make FLASH_SIZE=8M        # 8MB SPI Flash (W25Q64)
-make FLASH_SIZE=16M       # 16MB SPI Flash (W25Q128)
+make FLASH_SIZE=4M        # Standard 4MB SPI Flash (default)
+make FLASH_SIZE=8M        # 8MB SPI Flash
+make FLASH_SIZE=16M       # 16MB SPI Flash
 make FLASH_SIZE=0x400000  # Hexadecimal byte notation
 ```
 
@@ -165,20 +165,13 @@ At the completion of Boot ROM initialization, control is transferred to the firm
 
 ## ⚡ Physical Hardware & Flashing Guide
 
-### Hardware Compatibility Matrix
-| Platform / Generation | Supported | Notes & Requirements |
-| :--- | :---: | :--- |
-| **Intel i440FX + PIIX3/PIIX4** (Pentium II / III) | **YES** | Native support. Complete SDRAM MRC sequence (`mrc_440fx.asm`) & PAM (`0x59..0x5F`). |
-| **Intel Q35 + ICH9** (Core 2 / LGA 775) | **YES** | Native support. PAM (`0x90..0x96`), PCI enumeration, SMBus SPD probing. |
-| **Modern Intel (Core i 1st–14th gen)** | **NO** | Integrated Memory Controller (IMC) requires Intel FSP; Intel Boot Guard blocks unsigned flash. |
-| **Modern AMD (Zen 1–5)** | **NO** | Boot handled by AMD PSP (Platform Security Processor) before x86 reset vector release. |
-
 ### Flashing with `flashrom`
 > [!CAUTION]
 > **Always dump and verify two identical backups before flashing physical hardware!**
+> Set `PROGRAMMER` to the programmer interface supported by your hardware.
 > ```bash
-> flashrom -p ch341a_spi -r backup1.bin
-> flashrom -p ch341a_spi -r backup2.bin
+> flashrom -p "$PROGRAMMER" -r backup1.bin
+> flashrom -p "$PROGRAMMER" -r backup2.bin
 > cmp backup1.bin backup2.bin || echo "Flash read unstable! Check clamp and wiring!"
 > ```
 
@@ -186,11 +179,8 @@ At the completion of Boot ROM initialization, control is transferred to the firm
 # Build ROM image (default 4MB, or specify FLASH_SIZE):
 make FLASH_SIZE=4M
 
-# Write to physical SPI Flash via CH341A external programmer:
-flashrom -p ch341a_spi -w build/bootrom.bin
-
-# Or write via Raspberry Pi SPI header:
-flashrom -p linux_spi:dev=/dev/spidev0.0,spispeed=16000 -w build/bootrom.bin
+# Write to physical flash using a supported programmer:
+flashrom -p "$PROGRAMMER" -w build/bootrom.bin
 ```
 
 ---
@@ -206,7 +196,7 @@ A standard 2-digit LPC/PCI POST card connected to port `0x80` reports boot progr
 | `0x12` | MTRR Cache-as-RAM (CAR) setup started | Progress |
 | `0x13` | CAR stack operational at `0x7000:0x8000` (NEM enabled) | Progress |
 | `0x14` | PCI chipset probing started | Progress |
-| `0x15` | Chipset detected (i440FX `0x1237` or Q35 `0x29C0`) | Progress |
+| `0x15` | Supported chipset detected | Progress |
 | `0x16` | Memory Reference Code (MRC) DRAM training started | Progress |
 | `0x17` | DRAM sanity pattern test passed (`0x55AA55AA` / `0xAA55AA55`) | Progress |
 | `0x18` | CAR teardown complete (`wbinvd`, MTRRs restored, stack in DRAM) | Progress |

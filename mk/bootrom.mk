@@ -16,41 +16,41 @@ INIT_SRCS := $(SRC)/init.asm \
 
 bootrom: $(BOOTROM_BIN)
 
-$(OBJ)/init.bin: $(INIT_SRCS)
-	@mkdir -p $(OBJ)
+$(BIN)/init.bin: $(INIT_SRCS)
+	@mkdir -p $(BIN)
 	$(ASM) $(ASM_FLAGS) $(SRC)/init.asm -o $@
 
-$(OBJ)/reset.bin: $(SRC)/reset.asm $(INC)/contract.inc
-	@mkdir -p $(OBJ)
+$(BIN)/reset.bin: $(SRC)/reset.asm $(INC)/contract.inc
+	@mkdir -p $(BIN)
 	$(ASM) $(ASM_FLAGS) $(SRC)/reset.asm -o $@
 
-$(OBJ)/payload.bin: $(SRC)/payload.asm $(INC)/contract.inc $(SRC)/assets/vga_dac.bin $(SRC)/assets/font8x16.bin
-	@mkdir -p $(OBJ)
+$(BIN)/payload.bin: $(SRC)/payload.asm $(INC)/contract.inc $(SRC)/assets/vga_dac.bin $(SRC)/assets/font8x16.bin
+	@mkdir -p $(BIN)
 	$(ASM) $(ASM_FLAGS) $(SRC)/payload.asm -o $@
 
 # Track FLASH_SIZE configuration to auto-rebuild if size changes
-CONFIG_STAMP := $(OBJ)/.size_$(FLASH_SIZE)
+CONFIG_STAMP := $(BIN)/.size_$(FLASH_SIZE)
 $(CONFIG_STAMP):
-	@mkdir -p $(OBJ)
-	@rm -f $(OBJ)/.size_*
+	@mkdir -p $(BIN)
+	@rm -f $(BIN)/.size_*
 	@touch $@
 
 # Track firmware target configuration to auto-rebuild if payload changes
-FW_PAYLOAD := $(if $(FW_BIN),$(FW_BIN),$(OBJ)/payload.bin)
-FW_STAMP := $(OBJ)/.fw_$(subst /,-,$(subst .,-,$(FW_PAYLOAD)))
+FW_PAYLOAD := $(if $(FW_BIN),$(FW_BIN),$(BIN)/payload.bin)
+FW_STAMP := $(BIN)/.fw_$(subst /,-,$(subst .,-,$(FW_PAYLOAD)))
 $(FW_STAMP):
-	@mkdir -p $(OBJ)
-	@rm -f $(OBJ)/.fw_*
+	@mkdir -p $(BIN)
+	@rm -f $(BIN)/.fw_*
 	@touch $@
 
 # Single unified Boot ROM binary for physical hardware and emulation
-$(BOOTROM_BIN): $(OBJ)/init.bin $(OBJ)/reset.bin $(TOOLS)/build_rom.sh $(CONFIG_STAMP) $(FW_STAMP) $(FW_PAYLOAD)
+$(BOOTROM_BIN): $(BIN)/init.bin $(BIN)/reset.bin $(TOOLS)/build_rom.sh $(CONFIG_STAMP) $(FW_STAMP) $(FW_PAYLOAD)
 	@mkdir -p $(BUILD)
 	@if [ ! -f "$(FW_PAYLOAD)" ]; then \
 		echo "ERROR: Firmware payload '$(FW_PAYLOAD)' not found!" >&2; \
 		exit 1; \
 	fi; \
-	$(TOOLS)/build_rom.sh "$(FLASH_SIZE)" "$(FW_PAYLOAD)" $(OBJ)/init.bin $(OBJ)/reset.bin $@
+	$(TOOLS)/build_rom.sh "$(FLASH_SIZE)" "$(FW_PAYLOAD)" $(BIN)/init.bin $(BIN)/reset.bin $@
 
 # Alias for backwards compatibility
 spi-flash: $(BOOTROM_BIN)
