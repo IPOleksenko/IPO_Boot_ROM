@@ -1,5 +1,6 @@
 ; reset.asm — x86 Reset Vector (exactly 16 bytes)
-; Located at physical address 0xFFFFFFF0 (offset 262128 / 0x3FFF0 in 256KB ROM).
+; Located at physical address 0xFFFFFFF0. Its file offset is FLASH_SIZE - 16
+; (0x3FFF0 in a 256 KiB image).
 ;
 ; On x86 CPU reset:
 ;   CS selector = 0xF000, hidden base = 0xFFFF0000, IP = 0xFFF0
@@ -8,9 +9,9 @@
 ; The far jump resets the hidden base of CS to 0xF000 * 16 = 0x000F0000,
 ; enabling normal 16-bit real mode execution in the 1MB address space.
 ;
-; On both i440FX and Q35 chipsets, PAM registers default to 0x00 at reset,
+; On x86 PC host bridges, PAM registers default to 0x00 at reset,
 ; which routes reads from 0xF0000-0xFFFFF to PCI/ROM. This means the far
-; jump successfully fetches code from ROM even before any chipset init.
+; jump successfully fetches code from ROM even before any host bridge init.
 
 BITS 16
 ORG 0xFFF0

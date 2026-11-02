@@ -6,10 +6,9 @@
 INIT_SRCS := $(SRC)/init.asm \
              $(SRC)/payload_call.asm \
              $(SRC)/car.asm \
-             $(SRC)/chipset.asm \
-             $(SRC)/mrc_440fx.asm \
+             $(SRC)/host_bridge.asm \
+             $(SRC)/mrc.asm \
              $(SRC)/smbus.asm \
-             $(SRC)/mrc_q35.asm \
              $(SRC)/pic.asm \
              $(SRC)/pit.asm \
              $(INC)/contract.inc
@@ -36,7 +35,7 @@ $(CONFIG_STAMP):
 	@touch $@
 
 # Track firmware target configuration to auto-rebuild if payload changes
-FW_PAYLOAD := $(if $(FW_BIN),$(FW_BIN),$(BIN)/payload.bin)
+FW_PAYLOAD := $(if $(FIRMWARE),$(FIRMWARE),$(BIN)/payload.bin)
 FW_STAMP := $(BIN)/.fw_$(subst /,-,$(subst .,-,$(FW_PAYLOAD)))
 $(FW_STAMP):
 	@mkdir -p $(BIN)

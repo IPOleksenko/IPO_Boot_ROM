@@ -1,28 +1,30 @@
 ; contract.inc — Contract constants for IPO_Boot_ROM
 ; Target Architecture: x86 (16-bit Real Mode, 386+ with Pentium MSR support)
-; Target Chipsets:     Intel i440FX + PIIX3,  Intel Q35 + ICH9
+; Target Platform:     Universal x86 PC Host Bridge / Motherboard Architecture
 
 %ifndef CONTRACT_INC
 %define CONTRACT_INC
 
 ; =============================================================================
-; 1. ROM Layout & Addresses (256 KB ROM)
+; 1. ROM Window Addresses
 ; =============================================================================
 
-; Boot ROM init code — expanded area for hardware init (CAR, MRC, etc.)
-; ROM offset 0x38000 → physical 0xFFFF8000 → real-mode 0xF000:0x8000
+; Boot ROM init code. In a 256 KiB image, its file offset is 0x38000;
+; build_rom.sh places it at FLASH_SIZE - 0x8000 for other image sizes.
+; It maps to physical 0xFFFF8000 / real-mode 0xF000:0x8000.
 BOOTROM_SEG         equ 0xF000      ; Segment of Boot_ROM in ROM / Shadow RAM
 BOOTROM_INIT_OFF    equ 0x8000      ; Offset of Boot_ROM init entry point
 
-; Firmware payload location in ROM (256KB ROM layout)
-; ROM offset 0x30000 → physical 0xFFFF0000 → real-mode 0xF000:0x0000
+; Firmware payload slot. In a 256 KiB image, its file offset is 0x30000;
+; build_rom.sh places it at FLASH_SIZE - 0x10000 for other image sizes.
+; It maps to physical 0xFFFF0000 / real-mode 0xF000:0x0000.
 FW_ROM_SEG          equ 0xF000
 FW_ROM_OFF          equ 0x0000
 
 ; Firmware runs from Shadow RAM at 0xF000:0x0000 (same segment as ROM)
 FW_SHADOW_SEG       equ 0xF000
 FW_ENTRY_OFF        equ 0x0004      ; Entry point offset (after 4-byte magic)
-FW_MAX_SIZE_BYTES   equ 32768       ; 32 KB max firmware payload
+FW_MAX_SIZE_BYTES   equ 32768       ; 32 KiB max firmware payload
 FW_COPY_WORDS       equ 32768       ; 64 KB in 16-bit words (full segment shadow)
 
 ; Legacy aliases (kept for firmware compatibility)
@@ -30,9 +32,9 @@ FW_RAM_SEG          equ 0xF000      ; Now points to Shadow RAM, not 0x0800
 FW_RAM_OFF          equ 0x0000
 
 ; Firmware Magic Header (first 4 bytes of firmware payload)
-; "IPOF" in memory: 'I' (0x49), 'P' (0x50), 'O' (0x4F), 'F' (0x46)
-; When read as little-endian dword: 0x464F5049
-FW_MAGIC            equ 0x464F5049
+; "IPO" in memory: 'I' (0x49), 'P' (0x50), 'O' (0x4F), 0x00
+; When read as little-endian dword: 0x004F5049
+FW_MAGIC            equ 0x004F5049
 
 ; =============================================================================
 ; 2. Stack & Register Conventions
@@ -64,14 +66,15 @@ CAR_STACK_PTR       equ 0x8000      ; SP offset (top of 32KB, grows down)
 
 ; CAR Scratch Data Offsets (Segment CAR_STACK_SEG = 0x7000)
 ; Safe writable memory in CPU cache prior to DRAM readiness
-CAR_CHIPSET         equ 0x0000      ; byte: detected chipset (0=unknown, 1=i440fx, 2=q35)
-CAR_SERIAL_INIT     equ 0x0001      ; byte: 1 = serial initialized
-CAR_SMBUS_BASE      equ 0x0002      ; word: SMBus I/O base port
-CAR_NUM_DIMMS       equ 0x0004      ; byte: number of DIMMs detected
-CAR_TOTAL_RAM_MB    equ 0x0008      ; dword: total RAM in megabytes
-CAR_TOTAL_RAM_BYTES equ 0x000C      ; dword: total RAM in bytes
-CAR_DIMM_SIZES      equ 0x0010      ; 4 x dword = 16 bytes
-CAR_DIMM_TYPES      equ 0x0020      ; 4 x byte  = 4 bytes
+CAR_HOST_VID        equ 0x0000      ; word: Host Bridge Vendor ID from hardware
+CAR_HOST_DID        equ 0x0002      ; word: Host Bridge Device ID from hardware
+CAR_SERIAL_INIT     equ 0x0004      ; byte: 1 = serial initialized
+CAR_SMBUS_BASE      equ 0x0006      ; word: SMBus I/O base port
+CAR_NUM_DIMMS       equ 0x0008      ; byte: number of DIMMs detected
+CAR_TOTAL_RAM_MB    equ 0x000C      ; dword: total RAM in megabytes
+CAR_TOTAL_RAM_BYTES equ 0x0010      ; dword: total RAM in bytes
+CAR_DIMM_SIZES      equ 0x0014      ; 4 x dword = 16 bytes
+CAR_DIMM_TYPES      equ 0x0024      ; 4 x byte  = 4 bytes
 
 ; MTRR MSR Addresses
 MSR_MTRR_PHYSBASE0  equ 0x200       ; Variable MTRR Physical Base 0
@@ -94,119 +97,61 @@ PCI_CONFIG_DATA     equ 0x0CFC      ; PCI Configuration Data Port
 %define PCI_ADDR(bus, dev, fn, reg) (0x80000000 | ((bus) << 16) | ((dev) << 11) | ((fn) << 8) | ((reg) & 0xFC))
 
 ; =============================================================================
-; 5. Chipset: Intel i440FX (82441FX PMC) — Host Bridge PCI 0:0.0
+; 5. Generic Host Bridge & PAM Registers (PCI 0:0.0)
 ; =============================================================================
 
-I440FX_VID          equ 0x8086      ; Intel Vendor ID
-I440FX_DID          equ 0x1237      ; i440FX Device ID
-I440FX_PCI_ADDR     equ 0x80000000  ; PCI Bus 0, Dev 0, Fn 0
+HOST_BRIDGE_PCI_ADDR equ 0x80000000  ; PCI Bus 0, Dev 0, Fn 0
 
-; PAM Registers (Programmable Attribute Map)
-; Control routing of reads/writes for 0xC0000-0xFFFFF to ROM or DRAM
+; PAM Registers (Programmable Attribute Map) on Host Bridge
 ; Bits [1:0] = low region,  Bits [5:4] = high region
-;   00 = disabled (reads+writes → PCI/ROM)
-;   01 = RE (reads → DRAM, writes → PCI)
-;   10 = WE (reads → PCI/ROM, writes → DRAM)
-;   11 = RE+WE (reads+writes → DRAM)
-I440FX_PAM0         equ 0x59        ; 0xF0000-0xFFFFF (BIOS area)
-I440FX_PAM1         equ 0x5A        ; 0xC0000-0xC7FFF
-I440FX_PAM2         equ 0x5B        ; 0xC8000-0xCFFFF
-I440FX_PAM3         equ 0x5C        ; 0xD0000-0xD7FFF
-I440FX_PAM4         equ 0x5D        ; 0xD8000-0xDFFFF
-I440FX_PAM5         equ 0x5E        ; 0xE0000-0xE7FFF
-I440FX_PAM6         equ 0x5F        ; 0xE8000-0xEFFFF
+;   00 = disabled (reads+writes -> PCI/ROM)
+;   01 = RE (reads -> DRAM, writes -> PCI)
+;   10 = WE (reads -> PCI/ROM, writes -> DRAM)
+;   11 = RE+WE (reads+writes -> DRAM)
+HOST_PAM0_STD       equ 0x59        ; Standard PAM0 offset (0xF0000-0xFFFFF)
+HOST_PAM0_EXT       equ 0x90        ; Extended PAM0 offset (0xF0000-0xFFFFF)
 
-; PAM0 bit fields for BIOS area (0xF0000-0xFFFFF) — high nibble [5:4]
-PAM_DISABLED        equ 0x00        ; reads → ROM, writes → ROM
-PAM_RE              equ 0x10        ; reads → DRAM (shadow), writes → ROM
-PAM_WE              equ 0x20        ; reads → ROM, writes → DRAM
-PAM_RW              equ 0x30        ; reads+writes → DRAM
+; PAM bit fields for BIOS area (0xF0000-0xFFFFF) — high nibble [5:4]
+PAM_DISABLED        equ 0x00        ; reads -> ROM, writes -> ROM
+PAM_RE              equ 0x10        ; reads -> DRAM (shadow), writes -> ROM
+PAM_WE              equ 0x20        ; reads -> ROM, writes -> DRAM
+PAM_RW              equ 0x30        ; reads+writes -> DRAM
 
-; DRAM Row Boundary Registers (cumulative size in 8 MB units)
-I440FX_DRB0         equ 0x60        ; Row 0 boundary
-I440FX_DRB1         equ 0x61        ; Row 1 boundary
-I440FX_DRB2         equ 0x62        ; Row 2 boundary
-I440FX_DRB3         equ 0x63        ; Row 3 boundary
-I440FX_DRB4         equ 0x64        ; Row 4 boundary
-I440FX_DRB5         equ 0x65        ; Row 5 boundary
-I440FX_DRB6         equ 0x66        ; Row 6 boundary
-I440FX_DRB7         equ 0x67        ; Row 7 boundary
+; Host Bridge DRAM Row Boundary Registers (cumulative size in 8 MB units)
+HOST_DRB0           equ 0x60        ; Row 0 boundary
+HOST_DRB1           equ 0x61        ; Row 1 boundary
+HOST_DRB2           equ 0x62        ; Row 2 boundary
+HOST_DRB3           equ 0x63        ; Row 3 boundary
+HOST_DRB4           equ 0x64        ; Row 4 boundary
+HOST_DRB5           equ 0x65        ; Row 5 boundary
+HOST_DRB6           equ 0x66        ; Row 6 boundary
+HOST_DRB7           equ 0x67        ; Row 7 boundary
 
-; DRAM Timing Register
-I440FX_DRAMT        equ 0x68
-; Bits [1:0]: MA Wait States (00=0ws, 01=1ws)
-; Bits [3:2]: CAS Latency (00=3clk, 01=2clk)
-; Bit    [4]: EDO/SDRAM (0=EDO, 1=SDRAM)
+; Host Bridge Memory Controller Registers
+HOST_DRAMT          equ 0x68        ; DRAM Timing Register
+HOST_DRAMC          equ 0x57        ; DRAM Control Register
+HOST_SDRAMC         equ 0x76        ; SDRAM Control Register
+HOST_RPS            equ 0x74        ; Row Page Size Register
+HOST_PGPOL          equ 0x78        ; Paging Policy Register
 
-; DRAM Control Register
-I440FX_DRAMC        equ 0x57
-; Bit [0]: Hole at 15-16 MB enable
-; Bits [1:0]: DRAM type (depends on revision)
+; Extended Memory Controller Registers (TOLUD / TOM)
+HOST_GGC            equ 0x52        ; Graphics / Memory Control
+HOST_DEVEN          equ 0x54        ; Device Enable
+HOST_TOLUD          equ 0xB0        ; Top of Low Usable DRAM
+HOST_TOUUD          equ 0xA2        ; Top of Upper Usable DRAM
+HOST_TOM            equ 0xA0        ; Top of Memory
+HOST_TSEG           equ 0xB8        ; TSEG Memory Base
+HOST_DRC            equ 0x7C        ; DRAM Controller Mode
+HOST_DRT            equ 0x60        ; DRAM Timing
 
-; SDRAM Control Register
-I440FX_SDRAMC       equ 0x76
+; SMBus Host Controller Addresses (PCI)
+SMBUS_PCI_ADDR_PRI  equ 0x8000FB00  ; Primary SMBus (PCI Bus 0, Dev 31, Fn 3)
+SMBUS_BAR_PRI       equ 0x20        ; Primary SMBus Base Address Register (I/O)
+SMBUS_HOSTC_PRI     equ 0x40        ; Primary Host Configuration
 
-; Row Page Size Register
-I440FX_RPS          equ 0x74
-
-; Paging Policy Register
-I440FX_PGPOL        equ 0x78
-
-; =============================================================================
-; 6. Chipset: Intel Q35 MCH — Host Bridge PCI 0:0.0
-; =============================================================================
-
-Q35_VID             equ 0x8086      ; Intel Vendor ID
-Q35_DID             equ 0x29C0      ; Q35 MCH Device ID
-Q35_PCI_ADDR        equ 0x80000000  ; PCI Bus 0, Dev 0, Fn 0
-
-; Q35 MCH PAM Registers (same offsets as i440FX)
-Q35_PAM0            equ 0x90        ; 0xF0000-0xFFFFF (BIOS area)
-Q35_PAM1            equ 0x91        ; 0xC0000-0xC3FFF
-Q35_PAM2            equ 0x92        ; 0xC4000-0xC7FFF
-Q35_PAM3            equ 0x93        ; 0xC8000-0xCBFFF
-Q35_PAM4            equ 0x94        ; 0xCC000-0xCFFFF
-Q35_PAM5            equ 0x95        ; 0xD0000-0xD3FFF
-Q35_PAM6            equ 0x96        ; 0xD4000-0xD7FFF
-
-; Q35 MCH Memory Controller Registers
-Q35_GGC             equ 0x52        ; GMCH Graphics Control
-Q35_DEVEN           equ 0x54        ; Device Enable
-Q35_TOLUD           equ 0xB0        ; Top of Low Usable DRAM
-Q35_TOUUD           equ 0xA2        ; Top of Upper Usable DRAM
-Q35_TOM             equ 0xA0        ; Top of Memory
-Q35_TSEG            equ 0xB8        ; TSEG Memory Base
-
-; Q35 DRAM Timing / Configuration (simplified)
-Q35_DRC             equ 0x7C        ; DRAM Controller Mode
-Q35_DRT             equ 0x60        ; DRAM Timing
-Q35_DRB0            equ 0x60        ; DRAM Rank Boundary 0
-
-; =============================================================================
-; 7. Chipset: Intel PIIX3 (82371SB) — PCI 0:1.0 (ISA/LPC Bridge)
-; =============================================================================
-
-PIIX3_PCI_ADDR      equ 0x80000800  ; PCI Bus 0, Dev 1, Fn 0
-PIIX3_VID           equ 0x8086
-PIIX3_DID           equ 0x7000      ; PIIX3 ISA Bridge
-
-; =============================================================================
-; 8. Chipset: Intel ICH9 — PCI 0:1F.0 (LPC Bridge)
-; =============================================================================
-
-ICH9_LPC_PCI_ADDR   equ 0x8000F800  ; PCI Bus 0, Dev 31, Fn 0
-ICH9_VID            equ 0x8086
-ICH9_DID            equ 0x2918      ; ICH9 LPC Bridge
-
-; ICH9 SMBus Controller — PCI 0:1F.3
-ICH9_SMBUS_PCI_ADDR equ 0x8000FB00  ; PCI Bus 0, Dev 31, Fn 3
-ICH9_SMBUS_BAR      equ 0x20        ; Base Address Register (I/O)
-ICH9_SMBUS_HOSTC    equ 0x40        ; Host Configuration
-
-; PIIX4 SMBus Controller — PCI 0:7.3 (for i440FX/440BX boards)
-PIIX4_SMBUS_PCI_ADDR equ 0x80003B00  ; PCI Bus 0, Dev 7, Fn 3
-PIIX4_SMBUS_BAR      equ 0x90        ; Base Address Register in PIIX4
-PIIX4_SMBUS_HOSTC    equ 0xD2        ; Host Configuration in PIIX4
+SMBUS_PCI_ADDR_SEC  equ 0x80003B00  ; Secondary SMBus (PCI Bus 0, Dev 7, Fn 3)
+SMBUS_BAR_SEC       equ 0x90        ; Secondary Base Address Register
+SMBUS_HOSTC_SEC     equ 0xD2        ; Secondary Host Configuration
 
 ; SMBus Register Offsets (from BAR base)
 SMBUS_HST_STS       equ 0x00        ; Host Status
@@ -283,19 +228,11 @@ FW_CFG_ID_RAM_SIZE  equ 0x0001
 PORT_A20_FAST       equ 0x92
 
 ; =============================================================================
-; 12. Chipset Detection Result (stored in CAR/DRAM by chipset_detect)
-; =============================================================================
-
-; Values for detected chipset
-CHIPSET_UNKNOWN     equ 0x00
-CHIPSET_I440FX      equ 0x01
-CHIPSET_Q35         equ 0x02
-
-; =============================================================================
-; 13. Scratch RAM Offsets (Segment 0x0000, safe conventional memory)
+; 12. Scratch RAM Offsets (Segment 0x0000, safe conventional memory)
 ; =============================================================================
 SCRATCH_SEG         equ 0x0000
-SCRATCH_CHIPSET     equ 0x0508      ; byte: detected chipset
+SCRATCH_HOST_VID    equ 0x0508      ; word: Host Bridge Vendor ID from hardware
+SCRATCH_HOST_DID    equ 0x050A      ; word: Host Bridge Device ID from hardware
 SCRATCH_MEM_FLAG    equ 0x0510      ; byte: 1 = memory already detected
 SCRATCH_TOTAL_RAM   equ 0x0514      ; dword: total RAM in bytes
 SCRATCH_RAM_1_16M   equ 0x0518      ; word: RAM 1-16MB in KB
@@ -351,7 +288,7 @@ NVME_IO_SQ_ADDR     equ 0x5000
 NVME_IO_CQ_ADDR     equ 0x6000
 
 ; =============================================================================
-; 14. POST Diagnostic Port 0x80 Codes
+; 13. POST Diagnostic Port 0x80 Codes
 ; =============================================================================
 POST_PORT           equ 0x80
 
@@ -360,8 +297,8 @@ POST_RESET          equ 0x10        ; CPU Reset Vector reached (0xFFFFFFF0)
 POST_INIT_ENTRY     equ 0x11        ; Entered Boot_ROM initialization code
 POST_CAR_START      equ 0x12        ; Configuring CPU MTRRs for Cache-as-RAM
 POST_CAR_OK         equ 0x13        ; CAR stack active at 0x7000:0x8000
-POST_CHIPSET_PROBE  equ 0x14        ; Scanning PCI host bridge for chipset ID
-POST_CHIPSET_OK     equ 0x15        ; Chipset recognized (i440FX or Q35)
+POST_HOST_BRIDGE_PROBE equ 0x14     ; Scanning PCI host bridge
+POST_HOST_BRIDGE_OK    equ 0x15     ; Host bridge recognized
 POST_DRAM_START     equ 0x16        ; MRC initializing memory controllers
 POST_DRAM_OK        equ 0x17        ; DRAM test passed
 POST_CAR_TEARDOWN   equ 0x18        ; Cache flushed, stack moved to DRAM
@@ -369,7 +306,7 @@ POST_PIC_PIT_OK     equ 0x19        ; Legacy 8259 PIC and 8254 PIT initialized
 POST_SERIAL_OK      equ 0x1A        ; COM1 UART initialized at 115200 baud
 POST_SHADOW_START   equ 0x1B        ; Copying ROM to Shadow RAM (0xF0000)
 POST_SHADOW_LOCK    equ 0x1C        ; PAM locked read-only
-POST_FW_VALIDATE    equ 0x1D        ; Checking Firmware header magic ('IPOF')
+POST_FW_VALIDATE    equ 0x1D        ; Checking Firmware header magic ('IPO')
 POST_FW_JUMP        equ 0x1E        ; Jumping to Firmware entry point
 POST_WARN_SPD_FAIL  equ 0x1F        ; Warning: SPD read failed on SMBus, falling back to default
 

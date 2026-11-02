@@ -134,10 +134,10 @@ car_setup:
     ; Step 6: Fill CAR region to allocate cache lines
     ; -------------------------------------------------------------------------
     ; HARDWARE MITIGATION:
-    ; On physical Intel P6 processors (Pentium II/III Klamath/Deschutes/Coppermine),
+    ; On physical x86 processors,
     ; writing to a Write-Back region when DRAM is not yet initialized causes a
     ; Write-Allocate cache miss, which emits an RFO (Read-For-Ownership) bus cycle
-    ; on the FSB. If the host bridge (82441FX / 82443BX) does not terminate unmapped
+    ; on the FSB. If the host bridge does not terminate unmapped
     ; DRAM cycles cleanly, a continuous burst rep stosd can hang the bus.
     ;
     ; Mitigation:
@@ -213,7 +213,7 @@ car_teardown:
     ; -------------------------------------------------------------------------
     pop     bp
 
-    ; Preserve live register parameters (BL = CAR_CHIPSET, ECX = CAR_TOTAL_RAM_BYTES)
+    ; Preserve live register parameters (BX = CAR_HOST_VID, ECX = CAR_TOTAL_RAM_BYTES)
     ; in registers unaffected by CPUID and WRMSR
     mov     esi, ebx
     mov     edi, ecx

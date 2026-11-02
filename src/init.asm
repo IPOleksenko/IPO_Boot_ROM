@@ -3,7 +3,7 @@
 ;
 ; Boot sequence for real hardware:
 ;   1. CAR setup (stack in CPU cache — no DRAM yet)
-;   2. Chipset detection (i440FX vs Q35 via PCI probe)
+;   2. Host Bridge dynamic detection via PCI probe
 ;   3. MRC: DRAM controller initialization
 ;   4. CAR teardown, stack moves to real DRAM
 ;   5. PIC 8259A cascade initialization
@@ -42,39 +42,20 @@ bootrom_init:
     ; Phase 2: Hardware Initialization (stack available via CAR)
     ; =========================================================================
 
-    ; 2a. Detect chipset (reads PCI 0:0.0 Device ID)
-    call    chipset_detect
+    ; 2a. Query CPU brand string directly from hardware (CPUID)
+    call    cpu_print_brand_early
 
-    ; 2b. Initialize DRAM via Memory Reference Code
-    mov     ax, CAR_STACK_SEG
-    mov     es, ax
-    cmp     byte [es:CAR_CHIPSET], CHIPSET_I440FX
-    je      .mrc_440fx
-    cmp     byte [es:CAR_CHIPSET], CHIPSET_Q35
-    je      .mrc_q35
+    ; 2b. Detect Host Bridge directly from PCI 0:0.0
+    call    host_bridge_detect
 
-    ; Unknown chipset — skip MRC, hope DRAM works (QEMU fallback)
-    mov     si, msg_chipset_unknown
-    call    serial_print_early
-    jmp     .mrc_done
+    ; 2c. Initialize DRAM via Memory Reference Code
+    call    mrc_init
 
-.mrc_440fx:
-    mov     si, msg_chipset_440fx
-    call    serial_print_early
-    call    mrc_init_440fx
-    jmp     .mrc_done
-
-.mrc_q35:
-    mov     si, msg_chipset_q35
-    call    serial_print_early
-    call    mrc_init_q35
-    jmp     .mrc_done
-
-.mrc_done:
     ; Read detected parameters from CAR before teardown
     mov     ax, CAR_STACK_SEG
     mov     es, ax
-    mov     bl, [es:CAR_CHIPSET]
+    mov     bx, [es:CAR_HOST_VID]
+    mov     dx, [es:CAR_HOST_DID]
     mov     ecx, [es:CAR_TOTAL_RAM_BYTES]
 
     ; 2c. Tear down CAR — move stack to real DRAM
@@ -91,7 +72,8 @@ bootrom_init:
     rep     stosd
 
     ; Store detected parameters in safe DRAM Scratch RAM (0x0000:0x0500+)
-    mov     [es:SCRATCH_CHIPSET], bl
+    mov     [es:SCRATCH_HOST_VID], bx
+    mov     [es:SCRATCH_HOST_DID], dx
     mov     [es:SCRATCH_TOTAL_RAM], ecx
 
     ; 2d. Initialize PIC (8259A cascade mode)
@@ -337,22 +319,25 @@ vga_print:
 ;       a code block that must execute without stack.
 ;       All other modules are %included here as subroutine libraries.
 
-%include "chipset.asm"
-%include "mrc_440fx.asm"
+%include "host_bridge.asm"
+%include "mrc.asm"
 %include "smbus.asm"
-%include "mrc_q35.asm"
 %include "pic.asm"
 %include "pit.asm"
 
 ; =============================================================================
 ; Data / Strings (Stored in ROM)
 ; =============================================================================
+msg_cpu_prefix      db "[IPO_Boot_ROM] CPU: ", 0
+msg_bridge_prefix   db "[IPO_Boot_ROM] Host Bridge: PCI ID [", 0
+msg_bridge_rev      db "] Rev ", 0
+msg_bridge_suffix   db 10, 0
+msg_bridge_none     db "[IPO_Boot_ROM] Host Bridge: Not detected", 10, 0
+msg_mem_prefix      db "[IPO_Boot_ROM] Memory: ", 0
+msg_mem_suffix      db " MB", 10, 0
 msg_banner          db "[IPO_Boot_ROM] Hardware initialized. Shadowing firmware...", 10, 0
-msg_chipset_440fx   db "[IPO_Boot_ROM] Detected chipset: Intel i440FX (82441FX)", 10, 0
-msg_chipset_q35     db "[IPO_Boot_ROM] Detected chipset: Intel Q35 (MCH)", 10, 0
-msg_chipset_unknown db "[IPO_Boot_ROM] WARNING: Unknown chipset, skipping MRC", 10, 0
 msg_copying         db "[IPO_Boot_ROM] Shadowing ROM segment 0xF000 to DRAM...", 10, 0
-msg_shadow_ok       db "[IPO_Boot_ROM] Shadow RAM locked (read-only). PAM configured.", 10, 0
-msg_fw_ok           db "[IPO_Boot_ROM] Firmware magic 'IPOF' validated. Jumping to 0xF000:0004", 10, 0
+msg_shadow_ok       db "[IPO_Boot_ROM] Shadow RAM locked (read-only). PAM verified.", 10, 0
+msg_fw_ok           db "[IPO_Boot_ROM] Firmware magic 'IPO' validated. Jumping to 0xF000:0004", 10, 0
 msg_fw_invalid      db "[IPO_Boot_ROM] ERROR: Firmware magic header mismatch!", 10, 0
 msg_halted          db "[IPO_Boot_ROM] System halted.", 10, 0

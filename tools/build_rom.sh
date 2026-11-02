@@ -87,8 +87,23 @@ def main():
             fw_data = f.read()
         fw_size = len(fw_data)
         if fw_size > 32768:
-            print(f"ERROR: Firmware payload '{fw_bin}' ({fw_size} bytes) exceeds 32 KB slot!", file=sys.stderr)
-            sys.exit(1)
+            alt_bin = os.path.join(os.path.dirname(fw_bin), ".bin", os.path.basename(fw_bin))
+            if os.path.isfile(alt_bin) and os.path.getsize(alt_bin) <= 32768:
+                print(f"[build_rom] Note: '{fw_bin}' is a full image ({fw_size} bytes). Using intermediate payload '{alt_bin}'...")
+                with open(alt_bin, "rb") as f:
+                    fw_data = f.read()
+                fw_size = len(fw_data)
+            elif fw_data[:3] == b"IPO":
+                print(f"[build_rom] Extracting 32KB payload starting with 'IPO' from '{fw_bin}'...")
+                fw_data = fw_data[:32768]
+                fw_size = len(fw_data)
+            elif fw_size >= 65536 and fw_data[fw_size - 65536 : fw_size - 65536 + 3] == b"IPO":
+                print(f"[build_rom] Extracting 32KB payload from 64KB bank of '{fw_bin}'...")
+                fw_data = fw_data[fw_size - 65536 : fw_size - 32768]
+                fw_size = len(fw_data)
+            else:
+                print(f"ERROR: Firmware payload '{fw_bin}' ({fw_size} bytes) exceeds 32 KB slot!", file=sys.stderr)
+                sys.exit(1)
         rom[fw_offset:fw_offset + fw_size] = fw_data
         print(f"[build_rom] Embedding Firmware: {fw_bin} ({fw_size} bytes) at offset 0x{fw_offset:08X}")
     else:

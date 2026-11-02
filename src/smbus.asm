@@ -1,15 +1,14 @@
-; smbus.asm — SMBus/I2C Driver for Intel ICH9 SMBus Controller
-; Included by init.asm — depends on PCI helpers from chipset.asm
+; smbus.asm — Generic PCI SMBus/I2C Controller Driver
+; Included by init.asm — depends on PCI helpers from host_bridge.asm
 ;
-; The ICH9 SMBus controller sits at PCI 0:1F.3 (address 0x8000FB00).
-; It provides an I/O-mapped host interface for SMBus/I2C byte-level
-; transactions, used primarily to read SPD EEPROM data from DIMM modules.
+; Probes standard PCI SMBus controller locations for I/O-mapped SMBus interface
+; used to read SPD EEPROM memory module data.
 ;
 ; Subroutines:
 ;   smbus_init       — Configure BAR, enable host controller & I/O space
 ;   smbus_read_byte  — Read one byte via SMBus Byte Data protocol
 ;
-; Depends on (from chipset.asm):
+; Depends on (from host_bridge.asm):
 ;   pci_read_dword   — Read 32-bit PCI config register (EAX = PCI addr)
 ;   pci_write_dword  — Write 32-bit PCI config register (EAX = PCI addr, ECX = data)
 
@@ -18,13 +17,13 @@ BITS 16
 %include "contract.inc"
 
 ; =============================================================================
-; smbus_init — Initialize the ICH9 SMBus Controller
+; smbus_init — Initialize standard PCI SMBus Controller
 ; =============================================================================
 ;
 ; Steps:
-;   1. Read the SMBus I/O Base Address Register (PCI reg 0x20)
-;   2. Enable the SMBus Host Controller (PCI reg 0x40, bit 0)
-;   3. Enable I/O Space access in PCI Command register (reg 0x04, bit 0)
+;   1. Read the SMBus I/O Base Address Register
+;   2. Enable the SMBus Host Controller
+;   3. Enable I/O Space access in PCI Command register
 ;
 ; Inputs:  None
 ; Outputs: None (smbus_base_port is set)
@@ -42,85 +41,85 @@ smbus_init:
     mov     word [es:CAR_SMBUS_BASE], 0
 
     ; -----------------------------------------------------------------
-    ; 1. Check if ICH9 SMBus is present (PCI 0:1F.3)
+    ; 1. Check Primary SMBus Controller location (PCI 0:1F.3)
     ; -----------------------------------------------------------------
-    mov     eax, ICH9_SMBUS_PCI_ADDR
+    mov     eax, SMBUS_PCI_ADDR_PRI
     call    pci_read_dword          ; EAX = [DID | VID]
     cmp     ax, 0xFFFF
-    je      .check_piix4
+    je      .check_secondary
     test    ax, ax
-    jz      .check_piix4
+    jz      .check_secondary
 
-    ; Found ICH9 SMBus! Read SMBus BAR (reg 0x20)
-    mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_BAR
+    ; Read SMBus BAR
+    mov     eax, SMBUS_PCI_ADDR_PRI | SMBUS_BAR_PRI
     call    pci_read_dword
     and     ax, 0xFFFE              ; Mask off bit 0 (I/O space indicator)
     test    ax, ax
-    jnz     .ich9_have_bar
+    jnz     .pri_have_bar
     ; Assign default I/O base 0x0400 if unassigned
     mov     ecx, 0x00000401
-    mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_BAR
+    mov     eax, SMBUS_PCI_ADDR_PRI | SMBUS_BAR_PRI
     call    pci_write_dword
     mov     ax, 0x0400
-.ich9_have_bar:
+.pri_have_bar:
     mov     [es:CAR_SMBUS_BASE], ax
 
-    ; Enable SMBus Host Controller (PCI reg 0x40 bit 0)
-    mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_HOSTC
+    ; Enable SMBus Host Controller
+    mov     eax, SMBUS_PCI_ADDR_PRI | SMBUS_HOSTC_PRI
     call    pci_read_dword
     or      al, 0x01
     mov     ecx, eax
-    mov     eax, ICH9_SMBUS_PCI_ADDR | ICH9_SMBUS_HOSTC
+    mov     eax, SMBUS_PCI_ADDR_PRI | SMBUS_HOSTC_PRI
     call    pci_write_dword
 
     ; Enable I/O Space in PCI Command Register (reg 0x04 bit 0)
-    mov     eax, ICH9_SMBUS_PCI_ADDR | 0x04
+    mov     eax, SMBUS_PCI_ADDR_PRI | 0x04
     call    pci_read_dword
     or      al, 0x01
     mov     ecx, eax
-    mov     eax, ICH9_SMBUS_PCI_ADDR | 0x04
+    mov     eax, SMBUS_PCI_ADDR_PRI | 0x04
     call    pci_write_dword
     jmp     .init_done
 
-.check_piix4:
+.check_secondary:
     ; -----------------------------------------------------------------
-    ; 2. Check if PIIX4 SMBus is present (PCI 0:7.3, i440FX/440BX boards)
+    ; 2. Check Secondary SMBus Controller location (PCI 0:7.3)
     ; -----------------------------------------------------------------
-    mov     eax, PIIX4_SMBUS_PCI_ADDR
+    mov     eax, SMBUS_PCI_ADDR_SEC
     call    pci_read_dword          ; EAX = [DID | VID]
     cmp     ax, 0xFFFF
     je      .init_done
     test    ax, ax
     jz      .init_done
 
-    ; Found PIIX4 SMBus! Read Base Address from reg 0x90
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_BAR
+    ; Read Base Address
+    mov     eax, SMBUS_PCI_ADDR_SEC | SMBUS_BAR_SEC
     call    pci_read_dword
     and     ax, 0xFFF0
     test    ax, ax
-    jnz     .piix4_have_bar
+    jnz     .sec_have_bar
     ; Assign default I/O base 0x1000 if unassigned
     mov     ecx, 0x00001001
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_BAR
+    mov     eax, SMBUS_PCI_ADDR_SEC | SMBUS_BAR_SEC
     call    pci_write_dword
     mov     ax, 0x1000
-.piix4_have_bar:
+.sec_have_bar:
     mov     [es:CAR_SMBUS_BASE], ax
 
-    ; Enable PIIX4 Host Controller (PCI reg 0xD2: bit 0 = Host Enable, bit 1 = I/O Enable)
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_HOSTC
+    ; Enable Host Controller
+    mov     eax, SMBUS_PCI_ADDR_SEC | SMBUS_HOSTC_SEC
     call    pci_read_dword
     or      al, 0x03
     mov     ecx, eax
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | PIIX4_SMBUS_HOSTC
+    mov     eax, SMBUS_PCI_ADDR_SEC | SMBUS_HOSTC_SEC
     call    pci_write_dword
 
     ; Enable PCI I/O space in Command Register (reg 0x04 bit 0)
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | 0x04
+    mov     eax, SMBUS_PCI_ADDR_SEC | 0x04
     call    pci_read_dword
     or      al, 0x01
     mov     ecx, eax
-    mov     eax, PIIX4_SMBUS_PCI_ADDR | 0x04
+    mov     eax, SMBUS_PCI_ADDR_SEC | 0x04
     call    pci_write_dword
 
 .init_done:
@@ -135,7 +134,7 @@ smbus_init:
 ; smbus_read_byte — Read a Single Byte via SMBus Byte Data Protocol
 ; =============================================================================
 ;
-; Uses the ICH9 SMBus host interface to perform a Byte Data Read transaction.
+; Uses the standard PCI SMBus host interface to perform a Byte Data Read transaction.
 ; The SMBus Byte Data protocol sends a command byte (register offset) to the
 ; slave and reads back a single data byte.
 ;

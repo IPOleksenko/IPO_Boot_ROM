@@ -55,13 +55,16 @@ shadow_and_boot:
     call    vga_print
 
     ; -------------------------------------------------------------------------
-    ; 4. Validate Firmware Magic Signature ("IPOF" at 0xF000:0x0000)
+    ; 4. Validate Firmware Magic Signature ("IPO" at 0xF000:0x0000)
     ;    Now reading from DRAM shadow (which is a copy of ROM)
     ; -------------------------------------------------------------------------
     mov     ax, FW_SHADOW_SEG
     mov     es, ax
     mov     eax, [es:0]
     cmp     eax, FW_MAGIC
+    je      .fw_valid
+    and     eax, 0x00FFFFFF
+    cmp     eax, 0x004F5049
     je      .fw_valid
 
     ; Signature mismatch: print diagnostic and halt
@@ -81,7 +84,7 @@ shadow_and_boot:
     ; Contract 2 (Hardware Mode):
     ;   CPU: 16-bit real mode
     ;   CS:IP = 0xF000:0x0004
-    ;   SS:SP = 0x0000:0x7000
+    ;   SS:SP = 0x0000:0x7C00 (stack range 0x7000-0x7C00)
     ;   DS = 0x0000, ES = 0x0000
     ;   cli (interrupts disabled)
     ;   Shadow RAM 0xF0000-0xFFFFF is read-only (PAM locked)

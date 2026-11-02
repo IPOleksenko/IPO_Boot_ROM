@@ -3,18 +3,18 @@
 # =============================================================================
 
 run: $(TARGET_ROM)
-ifneq ($(OS_IMAGE),)
-	@if [ ! -f "$(OS_IMAGE)" ]; then \
-		echo "ERROR: OS storage media '$(OS_IMAGE)' not found!" >&2; \
+ifneq ($(OS),)
+	@if [ ! -f "$(OS)" ]; then \
+		echo "ERROR: OS storage media '$(OS)' not found!" >&2; \
 		exit 1; \
 	fi
 endif
-ifneq ($(FW_BIN),)
+ifneq ($(FIRMWARE),)
 	@echo "================================================================="
 	@echo "[IPO_Boot_ROM] Launching QEMU from hardware reset vector"
-	@echo "[IPO_Boot_ROM] Embedded Firmware: $(FW_BIN)"
-ifneq ($(OS_IMAGE),)
-	@echo "[IPO_Boot_ROM] Booting OS from storage media: $(OS_IMAGE)"
+	@echo "[IPO_Boot_ROM] Embedded Firmware: $(FIRMWARE)"
+ifneq ($(OS),)
+	@echo "[IPO_Boot_ROM] Booting OS from storage media: $(OS)"
 endif
 	@echo "================================================================="
 else
