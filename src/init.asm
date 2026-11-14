@@ -1,16 +1,5 @@
-; init.asm — Early initialization for IPO_Boot_ROM (Hardware-Compatible)
-; Assembled with ORG 0x8000, executed in CS=0xF000 (Physical 0xF8000 / 0xFFFF8000)
-;
-; Boot sequence for real hardware:
-;   1. CAR setup (stack in CPU cache — no DRAM yet)
-;   2. Host Bridge dynamic detection via PCI probe
-;   3. MRC: DRAM controller initialization
-;   4. CAR teardown, stack moves to real DRAM
-;   5. PIC 8259A cascade initialization
-;   6. PIT 8254 system timer initialization
-;   7. COM1 serial initialization
-;   8. Shadow ROM: copy 64KB ROM → DRAM via PAM, lock read-only
-;   9. Validate firmware magic, jump to 0xF000:0x0004
+; init.asm — Early hardware initialization for IPO_Boot_ROM
+; Assembled at ORG 0x8000, executed in CS=0xF000 (physical 0xFFFF8000 / 0xF8000)
 
 BITS 16
 ORG 0x8000
@@ -20,84 +9,92 @@ ORG 0x8000
 global bootrom_init
 
 bootrom_init:
-    ; =========================================================================
-    ; Phase 0: CPU Initialization (no stack, no DRAM)
-    ; =========================================================================
+    jmp     short .boot_start
+    db      "IPO_Boot_ROM"
+.boot_start:
     cli
     cld
 
-    ; Set DS = CS = 0xF000 so we can access ROM data (strings, tables)
+    ; Route 0xF0000-0xFFFFF to physical Flash ROM in case of a warm reset
+    ; where PAM0 was previously locked to Shadow RAM.
+    mov     eax, 0x80000000
+    mov     dx, PCI_CONFIG_ADDR
+    out     dx, eax
+    mov     dx, PCI_CONFIG_DATA
+    in      eax, dx
+    cmp     ax, 0xFFFF
+    je      .pam_warm_reset_done
+    shr     eax, 16
+    cmp     ax, 0x2500
+    jae     .pam_warm_reset_q35
+
+    mov     eax, 0x80000058
+    mov     dx, PCI_CONFIG_ADDR
+    out     dx, eax
+    mov     dx, PCI_CONFIG_DATA + 1     ; PAM0 at 0x59
+    in      al, dx
+    and     al, 0xCF
+    out     dx, al
+    jmp     .pam_warm_reset_done
+
+.pam_warm_reset_q35:
+    mov     eax, 0x80000090
+    mov     dx, PCI_CONFIG_ADDR
+    out     dx, eax
+    mov     dx, PCI_CONFIG_DATA         ; PAM0 at 0x90
+    in      al, dx
+    and     al, 0xCF
+    out     dx, al
+
+.pam_warm_reset_done:
     mov     ax, BOOTROM_SEG
     mov     ds, ax
 
-    ; =========================================================================
-    ; Phase 1: Cache-as-RAM Setup (inline — NO stack operations allowed yet)
-    ; car.asm provides the car_setup block which falls through to car_setup_done
-    ; After this, SS:SP is valid (stack in CPU cache)
-    ; =========================================================================
+    ; Set up Cache-as-RAM (inline, no stack available before completion)
     %include "car.asm"
-    ; Falls through to car_setup_done label
 
-    ; =========================================================================
-    ; Phase 2: Hardware Initialization (stack available via CAR)
-    ; =========================================================================
+    ; Initialize COM1 serial port (115200 8N1) for early diagnostics
+    call    serial_init
 
-    ; 2a. Query CPU brand string directly from hardware (CPUID)
-    call    cpu_print_brand_early
-
-    ; 2b. Detect Host Bridge directly from PCI 0:0.0
+    ; Log CPU identity and probe Host Bridge + DRAM
+    call    cpu_print_brand
     call    host_bridge_detect
-
-    ; 2c. Initialize DRAM via Memory Reference Code
     call    mrc_init
 
-    ; Read detected parameters from CAR before teardown
+    ; Read detected hardware parameters from CAR before cache teardown
     mov     ax, CAR_STACK_SEG
     mov     es, ax
     mov     bx, [es:CAR_HOST_VID]
     mov     dx, [es:CAR_HOST_DID]
     mov     ecx, [es:CAR_TOTAL_RAM_BYTES]
 
-    ; 2c. Tear down CAR — move stack to real DRAM
+    ; Tear down CAR and switch stack to initialized DRAM
     call    car_teardown
 
-    ; Clear Scratch RAM area (0x0000:0x0500 - 0x0000:0x05FF)
-    ; Ensures VGA cursor (0x0500) and device detection flags are zeroed on real hardware
+    ; Zero Scratch RAM (0x0000:0x0500 - 0x05FF) and store handoff parameters
     xor     ax, ax
     mov     es, ax
     mov     di, 0x0500
-    mov     cx, 64                  ; 64 dwords = 256 bytes
+    mov     cx, 64
     xor     eax, eax
     cld
     rep     stosd
 
-    ; Store detected parameters in safe DRAM Scratch RAM (0x0000:0x0500+)
     mov     [es:SCRATCH_HOST_VID], bx
     mov     [es:SCRATCH_HOST_DID], dx
     mov     [es:SCRATCH_TOTAL_RAM], ecx
 
-    ; 2d. Initialize PIC (8259A cascade mode)
+    ; Initialize 8259A PIC and 8254 PIT
     call    pic_init
-
-    ; 2e. Initialize PIT (8254 system timer, 18.2 Hz)
     call    pit_init
 
-    ; 2f. Initialize COM1 serial port for diagnostics
-    call    serial_init
-
-    ; =========================================================================
-    ; Phase 3: Boot Banner
-    ; =========================================================================
     mov     si, msg_banner
     call    serial_print
     call    vga_print
 
-    ; =========================================================================
-    ; Phase 4: Shadow ROM — Copy ROM to DRAM at 0xF0000, lock read-only
-    ; =========================================================================
+    ; Shadow ROM to DRAM at 0xF0000, lock read-only, and jump to firmware
     %include "payload_call.asm"
 
-    ; If payload_call returns (validation failed), halt
 halt_system:
     mov     si, msg_halted
     call    serial_print
@@ -106,34 +103,22 @@ halt_system:
     hlt
     jmp     .loop
 
-; =============================================================================
-; Early Serial Output (uses CAR stack — before full serial_init)
-; =============================================================================
-serial_print_early:
-    push    si
+; COM1 Serial Driver (115200 baud, 8N1)
+serial_init:
     push    ax
     push    dx
-    push    cx
-    push    es
 
-    mov     ax, CAR_STACK_SEG
-    mov     es, ax
-
-    cmp     byte [es:CAR_SERIAL_INIT], 1
-    je      .early_loop
-
-    ; Test if UART hardware actually exists via scratch register (port 0x3FF)
-    mov     dx, COM1_PORT + 7       ; Scratch register
+    ; Check UART presence via scratch register (0x3FF)
+    mov     dx, COM1_PORT + 7
     mov     al, 0xA5
     out     dx, al
     in      al, dx
     cmp     al, 0xA5
-    jne     .early_done             ; No UART present, silently return
+    jne     .done
 
-    ; Initialize COM1 at 115200 baud, 8N1
     mov     dx, COM1_PORT + 1
     xor     al, al
-    out     dx, al                  ; Disable interrupts
+    out     dx, al                  ; Disable UART interrupts
 
     mov     dx, COM1_PORT + 3
     mov     al, 0x80
@@ -141,11 +126,11 @@ serial_print_early:
 
     mov     dx, COM1_PORT + 0
     mov     al, 0x01
-    out     dx, al                  ; Divisor low = 1 (115200 baud)
+    out     dx, al                  ; Divisor latch low = 1 (115200 baud)
 
     mov     dx, COM1_PORT + 1
     xor     al, al
-    out     dx, al                  ; Divisor high = 0
+    out     dx, al                  ; Divisor latch high = 0
 
     mov     dx, COM1_PORT + 3
     mov     al, 0x03
@@ -153,63 +138,15 @@ serial_print_early:
 
     mov     dx, COM1_PORT + 2
     mov     al, 0xC7
-    out     dx, al                  ; Enable FIFO
+    out     dx, al                  ; Enable and clear FIFOs
 
     mov     dx, COM1_PORT + 4
     mov     al, 0x0B
-    out     dx, al                  ; DTR + RTS + OUT2
+    out     dx, al                  ; Assert DTR, RTS, OUT2
 
-    mov     byte [es:CAR_SERIAL_INIT], 1
-
-.early_loop:
-    lodsb
-    test    al, al
-    jz      .early_done
-    cmp     al, 10
-    jne     .early_send
-    push    ax
-    mov     al, 13
-    call    serial_tx_char_early
-    pop     ax
-.early_send:
-    call    serial_tx_char_early
-    jmp     .early_loop
-.early_done:
-    pop     es
-    pop     cx
+.done:
     pop     dx
     pop     ax
-    pop     si
-    ret
-
-serial_tx_char_early:
-    push    dx
-    push    ax
-    push    cx
-    mov     ah, al
-    mov     dx, COM1_PORT + 5
-    mov     cx, 0xFFFF
-.wait:
-    in      al, dx
-    test    al, 0x20
-    jnz     .ready
-    dec     cx
-    jnz     .wait
-    jmp     .timeout                ; Port timed out (no hanging!)
-.ready:
-    mov     al, ah
-    mov     dx, COM1_PORT
-    out     dx, al
-.timeout:
-    pop     cx
-    pop     ax
-    pop     dx
-    ret
-
-; =============================================================================
-; Full Serial (COM1) Driver Routines (used after Phase 2)
-; =============================================================================
-serial_init:
     ret
 
 serial_tx_char:
@@ -225,7 +162,7 @@ serial_tx_char:
     jnz     .send_byte
     dec     cx
     jnz     .wait_empty
-    jmp     .tx_done                ; Avoid hang on disconnected UART
+    jmp     .tx_done
 .send_byte:
     mov     al, ah
     mov     dx, COM1_PORT
@@ -257,22 +194,164 @@ serial_print:
     pop     si
     ret
 
-; =============================================================================
-; Direct VGA Text Buffer (0xB800:0000) Output Routines
-; =============================================================================
+; Print AL as 2 hex digits to COM1
+serial_print_hex8:
+    push    ax
+    push    bx
+    mov     bl, al
+    shr     al, 4
+    call    .nibble
+    mov     al, bl
+    and     al, 0x0F
+    call    .nibble
+    pop     bx
+    pop     ax
+    ret
+.nibble:
+    add     al, '0'
+    cmp     al, '9'
+    jbe     .out
+    add     al, 7
+.out:
+    call    serial_tx_char
+    ret
+
+; Print DX as 4 hex digits to COM1
+serial_print_hex16:
+    push    ax
+    mov     al, dh
+    call    serial_print_hex8
+    mov     al, dl
+    call    serial_print_hex8
+    pop     ax
+    ret
+
+; Print EAX as unsigned decimal to COM1
+serial_print_dec:
+    pushad
+    xor     ecx, ecx
+    mov     ebx, 10
+.div_loop:
+    xor     edx, edx
+    div     ebx
+    push    dx
+    inc     cx
+    test    eax, eax
+    jnz     .div_loop
+.print_loop:
+    pop     ax
+    add     al, '0'
+    call    serial_tx_char
+    loop    .print_loop
+    popad
+    ret
+
+; CPU Identification via CPUID
+cpu_print_brand:
+    pushad
+    push    ds
+    push    es
+
+    mov     si, msg_cpu_prefix
+    call    serial_print
+
+    mov     eax, 0x80000000
+    cpuid
+    cmp     eax, 0x80000004
+    jb      .fallback_vendor
+
+    sub     sp, 48
+    mov     bp, sp
+
+    mov     eax, 0x80000002
+    cpuid
+    mov     [ss:bp + 0], eax
+    mov     [ss:bp + 4], ebx
+    mov     [ss:bp + 8], ecx
+    mov     [ss:bp + 12], edx
+
+    mov     eax, 0x80000003
+    cpuid
+    mov     [ss:bp + 16], eax
+    mov     [ss:bp + 20], ebx
+    mov     [ss:bp + 24], ecx
+    mov     [ss:bp + 28], edx
+
+    mov     eax, 0x80000004
+    cpuid
+    mov     [ss:bp + 32], eax
+    mov     [ss:bp + 36], ebx
+    mov     [ss:bp + 40], ecx
+    mov     [ss:bp + 44], edx
+
+    mov     si, bp
+    mov     cx, 48
+    xor     bl, bl
+.print_loop:
+    mov     al, [ss:si]
+    inc     si
+    test    al, al
+    jz      .brand_done
+    cmp     al, ' '
+    jne     .emit_char
+    test    bl, bl
+    jz      .skip_space
+.emit_char:
+    mov     bl, 1
+    call    serial_tx_char
+.skip_space:
+    loop    .print_loop
+
+.brand_done:
+    add     sp, 48
+    jmp     .done
+
+.fallback_vendor:
+    xor     eax, eax
+    cpuid
+    push    ecx
+    push    edx
+    push    ebx
+    mov     bp, sp
+    mov     cx, 12
+.vendor_loop:
+    mov     al, [ss:bp]
+    inc     bp
+    call    serial_tx_char
+    loop    .vendor_loop
+    add     sp, 12
+
+.done:
+    mov     al, 13
+    call    serial_tx_char
+    mov     al, 10
+    call    serial_tx_char
+    pop     es
+    pop     ds
+    popad
+    ret
+
+; Direct VGA Text Buffer Output (0xB800:0000)
 vga_print:
     push    es
     push    si
     push    di
     push    ax
     push    bx
+    push    dx
 
-    ; Read cursor offset from RAM 0x0000:0x0500
+    ; Only write to 0xB8000 if VGA hardware has RAM decode enabled (Misc Out bit 1)
+    mov     dx, 0x03CC
+    in      al, dx
+    cmp     al, 0xFF
+    je      .no_vga
+    test    al, 0x02
+    jz      .no_vga
+
     xor     ax, ax
     mov     es, ax
     mov     di, [es:0x0500]
 
-    ; Point ES to VGA text segment
     mov     ax, VGA_TEXT_SEG
     mov     es, ax
 
@@ -284,7 +363,6 @@ vga_print:
     cmp     al, 10
     je      .newline
 
-    ; Write character + attribute (0x0F = white on black)
     mov     ah, 0x0F
     stosw
     jmp     .loop
@@ -300,11 +378,12 @@ vga_print:
     jmp     .loop
 
 .done:
-    ; Save updated DI back to scratch RAM 0x0000:0x0500
     xor     ax, ax
     mov     es, ax
     mov     [es:0x0500], di
 
+.no_vga:
+    pop     dx
     pop     bx
     pop     ax
     pop     di
@@ -312,22 +391,12 @@ vga_print:
     pop     es
     ret
 
-; =============================================================================
-; Included Modules (Hardware Initialization)
-; =============================================================================
-; NOTE: car.asm is %included inline above (Phase 1) because it contains
-;       a code block that must execute without stack.
-;       All other modules are %included here as subroutine libraries.
-
 %include "host_bridge.asm"
-%include "mrc.asm"
 %include "smbus.asm"
+%include "mrc.asm"
 %include "pic.asm"
 %include "pit.asm"
 
-; =============================================================================
-; Data / Strings (Stored in ROM)
-; =============================================================================
 msg_cpu_prefix      db "[IPO_Boot_ROM] CPU: ", 0
 msg_bridge_prefix   db "[IPO_Boot_ROM] Host Bridge: PCI ID [", 0
 msg_bridge_rev      db "] Rev ", 0
@@ -338,6 +407,8 @@ msg_mem_suffix      db " MB", 10, 0
 msg_banner          db "[IPO_Boot_ROM] Hardware initialized. Shadowing firmware...", 10, 0
 msg_copying         db "[IPO_Boot_ROM] Shadowing ROM segment 0xF000 to DRAM...", 10, 0
 msg_shadow_ok       db "[IPO_Boot_ROM] Shadow RAM locked (read-only). PAM verified.", 10, 0
-msg_fw_ok           db "[IPO_Boot_ROM] Firmware magic 'IPO' validated. Jumping to 0xF000:0004", 10, 0
+msg_fw_ok           db "[IPO_Boot_ROM] Firmware magic validated. Jumping to 0xF000:000C", 10, 0
 msg_fw_invalid      db "[IPO_Boot_ROM] ERROR: Firmware magic header mismatch!", 10, 0
 msg_halted          db "[IPO_Boot_ROM] System halted.", 10, 0
+magic_firmware      db "IPO_Firmware"
+magic_bootrom       db "IPO_Boot_ROM"

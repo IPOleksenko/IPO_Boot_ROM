@@ -1,100 +1,130 @@
-; payload_call.asm — Shadows ROM to DRAM, validates firmware, and jumps
-; Included by init.asm (Phase 4)
-;
-; Shadow ROM process:
-;   1. Open PAM for writes to 0xF0000-0xFFFFF (reads still from ROM)
-;   2. Copy 64KB from ROM to DRAM at same address range
-;   3. Lock PAM to read-only (reads from DRAM shadow, writes blocked)
-;   4. Validate firmware magic signature at 0xF000:0x0000
-;   5. Jump to firmware at 0xF000:0x0004
-;
-; NOTE: After step 3, all code execution switches seamlessly to DRAM shadow
-;       because the CPU's instruction fetches now read from DRAM instead of ROM.
-;       The DRAM shadow contains an identical copy, so execution continues
-;       uninterrupted.
+; payload_call.asm — Shadows 64 KB ROM to DRAM, verifies Firmware header, and jumps
+
+SHADOW_STAGE_SEG    equ 0x2000      ; Temporary DRAM buffer (0x20000-0x2FFFF)
+SHADOW_TRAMP_SEG    equ 0x0000
+SHADOW_TRAMP_OFF    equ 0x0600      ; Low-RAM trampoline outside 0xF0000-0xFFFFF
 
 shadow_and_boot:
-    ; -------------------------------------------------------------------------
-    ; 1. Open PAM: enable DRAM writes to 0xF0000-0xFFFFF
-    ;    Reads still go to ROM, writes go to DRAM
-    ; -------------------------------------------------------------------------
     mov     si, msg_copying
     call    serial_print
     call    vga_print
 
-    call    pam_open_write
-
-    ; -------------------------------------------------------------------------
-    ; 2. Copy 64KB from ROM (read path) to DRAM (write path) at 0xF0000
-    ;    PAM state: RE=0 (reads → ROM), WE=1 (writes → DRAM)
-    ;    So DS:SI reads from ROM, ES:DI writes to DRAM, same address range!
-    ; -------------------------------------------------------------------------
+    ; Copy 64 KB Flash ROM window (0xF000:0000) to staging DRAM while ROM is mapped readable.
+    ; Changing PAM0 while still fetching from 0xF0000 would pull active code out from under EIP.
     cld
-    mov     ax, BOOTROM_SEG                 ; 0xF000
-    mov     ds, ax
-    mov     es, ax
-    xor     si, si                          ; DS:SI = 0xF000:0x0000 (read from ROM)
-    xor     di, di                          ; ES:DI = 0xF000:0x0000 (write to DRAM)
-    mov     cx, FW_COPY_WORDS               ; 32768 words = 64 KB
-    rep     movsw
-
-    ; Restore DS to our code segment (now in DRAM, but same content)
     mov     ax, BOOTROM_SEG
     mov     ds, ax
+    mov     ax, SHADOW_STAGE_SEG
+    mov     es, ax
+    xor     si, si
+    xor     di, di
+    mov     cx, FW_COPY_WORDS
+    rep     movsw
 
-    ; -------------------------------------------------------------------------
-    ; 3. Lock PAM: reads from DRAM shadow, writes blocked
-    ;    After this call, ALL instruction fetches from 0xF0000-0xFFFFF
-    ;    come from DRAM. Since we just copied ROM → DRAM, execution continues
-    ;    seamlessly from the DRAM copy.
-    ; -------------------------------------------------------------------------
-    call    pam_lock_readonly
+    ; Copy position-independent trampoline into low conventional DRAM (0x0000:0x0600)
+    mov     ax, BOOTROM_SEG
+    mov     ds, ax
+    xor     ax, ax
+    mov     es, ax
+    mov     si, shadow_trampoline
+    mov     di, SHADOW_TRAMP_OFF
+    mov     cx, shadow_trampoline_end - shadow_trampoline
+    rep     movsb
 
+    xor     ax, ax
+    mov     ds, ax
+    jmp     SHADOW_TRAMP_SEG:SHADOW_TRAMP_OFF
+
+shadow_trampoline:
+    ; Select i440FX PAM0 (0x59) or Q35/MCH PAM0 (0x90) from Scratch Host DID
+    mov     ax, [SCRATCH_HOST_DID]
+    test    ax, ax
+    jz      .enter_shadow
+    cmp     ax, 0x2500
+    jae     .q35_pam
+
+    mov     esi, HOST_BRIDGE_PCI_ADDR + (HOST_PAM0_STD & 0xFC)
+    mov     bp, PCI_CONFIG_DATA + (HOST_PAM0_STD & 0x03)
+    jmp     short .enable_rw
+
+.q35_pam:
+    mov     esi, HOST_BRIDGE_PCI_ADDR + (HOST_PAM0_EXT & 0xFC)
+    mov     bp, PCI_CONFIG_DATA + (HOST_PAM0_EXT & 0x03)
+
+.enable_rw:
+    ; Set PAM0 Read+Write DRAM (PAM_RW), preserving reserved lower nibble
+    mov     eax, esi
+    mov     dx, PCI_CONFIG_ADDR
+    out     dx, eax
+    mov     dx, bp
+    in      al, dx
+    and     al, 0x0F
+    mov     bl, al
+    or      al, PAM_RW
+    out     dx, al
+
+    ; Copy 64 KB from staging DRAM (0x2000:0000) into Shadow DRAM (0xF000:0000)
+    cld
+    mov     ax, SHADOW_STAGE_SEG
+    mov     ds, ax
+    mov     ax, FW_SHADOW_SEG
+    mov     es, ax
+    xor     si, si
+    xor     di, di
+    mov     cx, FW_COPY_WORDS
+    rep     movsw
+
+    ; Lock Shadow DRAM read-only (PAM_RE: reads -> DRAM, writes blocked)
+    mov     eax, esi
+    mov     dx, PCI_CONFIG_ADDR
+    out     dx, eax
+    mov     dx, bp
+    mov     al, bl
+    or      al, PAM_RE
+    out     dx, al
+
+.enter_shadow:
+    mov     ax, BOOTROM_SEG
+    mov     ds, ax
+    jmp     BOOTROM_SEG:shadow_resume
+shadow_trampoline_end:
+
+shadow_resume:
     mov     si, msg_shadow_ok
     call    serial_print
     call    vga_print
 
-    ; -------------------------------------------------------------------------
-    ; 4. Validate Firmware Magic Signature ("IPO" at 0xF000:0x0000)
-    ;    Now reading from DRAM shadow (which is a copy of ROM)
-    ; -------------------------------------------------------------------------
+    ; Validate 12-byte magic ("IPO_Firmware" or "IPO_Boot_ROM") at 0xF000:0x0000
     mov     ax, FW_SHADOW_SEG
     mov     es, ax
-    mov     eax, [es:0]
-    cmp     eax, FW_MAGIC
-    je      .fw_valid
-    and     eax, 0x00FFFFFF
-    cmp     eax, 0x004F5049
-    je      .fw_valid
+    cld
+    mov     si, magic_firmware
+    xor     di, di
+    mov     cx, 12
+    repe    cmpsb
+    je      shadow_fw_valid
 
-    ; Signature mismatch: print diagnostic and halt
+    mov     si, magic_bootrom
+    xor     di, di
+    mov     cx, 12
+    repe    cmpsb
+    je      shadow_fw_valid
+
     mov     si, msg_fw_invalid
     call    serial_print
     call    vga_print
     jmp     halt_system
 
-.fw_valid:
+shadow_fw_valid:
     mov     si, msg_fw_ok
     call    serial_print
     call    vga_print
 
-    ; -------------------------------------------------------------------------
-    ; 5. Prepare Environment & Far Jump to Firmware in Shadow RAM
-    ; -------------------------------------------------------------------------
-    ; Contract 2 (Hardware Mode):
-    ;   CPU: 16-bit real mode
-    ;   CS:IP = 0xF000:0x0004
-    ;   SS:SP = 0x0000:0x7C00 (stack range 0x7000-0x7C00)
-    ;   DS = 0x0000, ES = 0x0000
-    ;   cli (interrupts disabled)
-    ;   Shadow RAM 0xF0000-0xFFFFF is read-only (PAM locked)
-    ;   PIC initialized (all IRQs masked except cascade)
-    ;   PIT initialized (18.2 Hz system timer)
-    ;   DRAM is fully initialized and available
     xor     ax, ax
     mov     ds, ax
     mov     es, ax
     mov     ss, ax
+    xor     esp, esp
     mov     sp, BOOT_STACK_PTR
     cli
 

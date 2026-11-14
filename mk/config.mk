@@ -60,11 +60,13 @@ ifneq ($(AUDIO),none)
 QEMU_FLAGS += -audiodev $(AUDIO),id=pa -machine pcspk-audiodev=pa
 endif
 
-# If an OS storage media image is supplied, attach it according to DRIVE_TYPE (ide, ahci, or usb)
+# If an OS storage media image is supplied, attach it according to DRIVE_TYPE (ide, ahci, nvme, or usb)
 ifneq ($(OS),)
 DRIVE_TYPE ?= ide
 ifeq ($(DRIVE_TYPE),ahci)
 QEMU_FLAGS += -device ahci,id=ahci -device ide-hd,drive=sata_disk,bus=ahci.0 -drive id=sata_disk,file=$(OS),format=raw,if=none
+else ifeq ($(DRIVE_TYPE),nvme)
+QEMU_FLAGS += -drive file=$(OS),format=raw,if=none,id=nvme_disk -device nvme,serial=IPO1234,drive=nvme_disk
 else ifeq ($(DRIVE_TYPE),usb)
 QEMU_FLAGS += -device usb-ehci,id=ehci -device usb-storage,bus=ehci.0,drive=usb_disk -drive id=usb_disk,file=$(OS),format=raw,if=none
 else

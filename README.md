@@ -16,19 +16,19 @@ Jump to Real-Mode ROM Base (jmp 0xF000:0x8000)
   │
   ▼
 Low-Level Hardware Initialization
-  ├─ Phase 1: Cache-as-RAM (CAR) setup via MTRRs (stack at 0x7000:0x8000)
-  ├─ Phase 2: Host Chipset Detection via PCI probe
-  ├─ Phase 3: Memory Reference Code (MRC) DRAM controller training
-  ├─ Phase 4: CAR teardown, system stack relocated to DRAM (range 0x7000-0x7C00, SP=0x7C00)
-  ├─ Phase 5: Cascaded 8259A PIC & 8254 PIT (18.2 Hz) timer configuration
-  ├─ Phase 6: COM1 UART Serial initialization (115200 baud, 8N1)
-  ├─ Phase 7: PAM Shadow RAM copy (64 KB ROM -> DRAM at 0xF000:0000)
-  ├─ Phase 8: PAM Lock: write-protect 0xF0000-0xFFFFF as Read-Only
-  └─ Phase 9: Validate 4-byte firmware magic: 'IPO' (0x004F5049)
+  ├─ Warm-reset guard: Clear host-bridge PAM0 shadow bits to map Flash ROM
+  ├─ Phase 1: Cache-as-RAM (CAR) setup via MTRRs (0x70000-0x77FFF, stack at 0x7000:0x8000)
+  ├─ Phase 2: COM1 UART Serial initialization (115200 baud, 8N1)
+  ├─ Phase 3: CPU brand logging, PCI Host Bridge probe (0:0.0), and MRC DRAM init (SPD/CMOS)
+  ├─ Phase 4: CAR teardown (MTRRs: DRAM WB, MMIO UC), stack in DRAM (0x0000:0x7C00), Scratch RAM init (0x0500-0x05FF)
+  ├─ Phase 5: Cascaded PIC (all masked except IRQ2) & PIT (Ch0 ~18.2 Hz, Ch1 ~66.3 kHz refresh)
+  ├─ Phase 6: Stage 64 KB ROM to 0x2000:0000 DRAM and copy into Shadow DRAM (0xF000:0000) via 0x0000:0x0600 trampoline
+  ├─ Phase 7: PAM Lock: write-protect 0xF0000-0xFFFFF as Read-Only (PAM_RE)
+  └─ Phase 8: Validate 12-byte magic at 0xF000:0x0000 ("IPO_Firmware" or "IPO_Boot_ROM")
   │
   ▼
-Execution Handover (Contract 2)
-  └─ Transfers control via: jmp 0xF000:0004 (Shadow RAM)
+Execution Handover
+  └─ Transfers control (DS=ES=SS=0x0000, SP=0x7C00, cli) via: jmp 0xF000:0x000C
 ```
 
 ---
@@ -81,13 +81,20 @@ Embeds the firmware binary and attaches the storage media:
 make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img
 ```
 
-### 5. Selecting Storage Interface (`DRIVE_TYPE`)
-You can choose the virtual storage bus controller for testing:
+### 5. Selecting Storage Interface (`DRIVE_TYPE`) and Machine Options
+You can choose the virtual storage bus controller and hardware profile for testing:
 ```bash
 make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ide   # Default: Legacy IDE/PATA
-make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ahci  # Modern SATA AHCI
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=ahci  # SATA AHCI
+make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=nvme  # PCIe NVMe SSD
 make run FIRMWARE=path/to/firmware.bin OS=path/to/disk.img DRIVE_TYPE=usb   # USB 2.0 Flash Drive (EHCI BOT)
 ```
+
+Additional `make run` variables supported in `mk/config.mk`:
+- `MACHINE=<type>` (QEMU machine profile configured in `mk/config.mk`)
+- `CPU=<model>` and `MEM=<MB>` (default memory `512` MiB)
+- `DISK=path/to/secondary.img` (optional secondary IDE disk for `DRIVE_TYPE=ide`; also auto-detects `disks/disk.img` or `disk.img` next to `OS`)
+- `QEMU_EXTRA="..."` (extra arguments passed directly to `qemu-system-i386`)
 
 ### 6. Packaging for Physical Hardware & SPI Flash
 `make` generates a single unified binary `build/bootrom.bin` ready for physical hardware. Both standard and arbitrary non-standard sizes are supported:
@@ -121,18 +128,21 @@ make run AUDIO=none ...   # Disable audio connection
 
 | File | Size | Description |
 | :--- | :--- | :--- |
-| `build/bootrom.bin` | Configurable (`FLASH_SIZE`, default 4 MiB / 4,194,304 B) | Single unified ROM image ready for physical SPI flash programming (`flashrom`) and QEMU emulation |
+| `build/bootrom.bin` | Configurable (`FLASH_SIZE`, min `64K` / 65,536 B, default `4M` / 4,194,304 B) | Single unified ROM image ready for physical SPI flash programming and QEMU emulation |
+| `build/.bin/init.bin` | <= 32 KiB (fits before reset vector) | Assembled early-init binary (`init.asm` and included hardware modules) |
+| `build/.bin/payload.bin` | <= 32 KiB | Built-in standalone diagnostic payload (`payload.asm`, magic `"IPO_Boot_ROM"`) |
+| `build/.bin/reset.bin` | 16 B | Assembled x86 Reset Vector (`reset.asm`) |
 
 ---
 
 ## ROM Layout
 
-The build places each region relative to the end of the configured ROM image. For a `FLASH_SIZE` of `N` bytes, the payload starts at `N - 0x10000`, init code at `N - 0x8000`, and the reset vector at `N - 0x10`. Thus the file offsets below are examples for `FLASH_SIZE=256K`; the default `FLASH_SIZE=4M` uses offsets `0x3F0000`, `0x3F8000`, and `0x3FFFF0`, respectively.
+The build places each region relative to the end of the configured ROM image (`FLASH_SIZE >= 64K`). For a `FLASH_SIZE` of `N` bytes, the payload starts at `N - 0x10000`, init code at `N - 0x8000`, and the reset vector at `N - 0x10`. Thus the file offsets below are examples for `FLASH_SIZE=256K`; the default `FLASH_SIZE=4M` uses offsets `0x3F0000`, `0x3F8000`, and `0x3FFFF0`, respectively.
 
 | File Offset (`FLASH_SIZE=256K`) | Linear Phys (4G Alias) | Real-Mode Alias | Component / Content |
 | :--- | :--- | :--- | :--- |
-| `0x30000` | `0xFFFF0000` | `0xF000:0x0000` | **Firmware Payload Slot** (up to 32 KiB, begins with magic `'IPO'`) |
-| `0x38000` | `0xFFFF8000` | `0xF000:0x8000` | **Boot_ROM Init Code** (`init.asm`, CAR, MRC, PIC, PIT, chipset probe) |
+| `0x30000` | `0xFFFF0000` | `0xF000:0x0000` | **Firmware Payload Slot** (up to 32 KiB; begins with 12-byte magic `"IPO_Firmware"` or `"IPO_Boot_ROM"`, entry at `+0x0C`) |
+| `0x38000` | `0xFFFF8000` | `0xF000:0x8000` | **Boot_ROM Init Code** (`init.asm`: CAR, COM1, host bridge, MRC, PIC, PIT, shadow copy) |
 | `0x3FFF0` | `0xFFFFFFF0` | `0xF000:0xFFF0` | **Hardware Reset Vector** (16 bytes: `jmp 0xF000:0x8000`) |
 
 ---
@@ -142,76 +152,36 @@ The build places each region relative to the end of the configured ROM image. Fo
 ### Memory Map (Conventional 1 MB Space)
 | Memory Range | Physical Address | Usage / Component |
 | :--- | :--- | :--- |
-| `0x0000:0x0000` | `0x00000000` | Interrupt Vector Table (IVT, 1024 B) |
-| `0x0040:0x0000` | `0x00000400` | BIOS Data Area (BDA, 256 B) |
-| `0x0000:0x0500` | `0x00000500` | Scratch RAM (Registry, peripheral flags, E820 buffer) |
-| `0x0000:0x7000` | `0x00007000` | Boot stack range `0x7000-0x7C00` in DRAM; initial `SP=0x7C00`, grows downward |
-| `0x0000:0x7C00` | `0x00007C00` | MBR Load Buffer (512 B boot sector target) |
-| `0x9FC0:0x0000` | `0x0009FC00` | Extended BIOS Data Area (EBDA) & ACPI 1.0 tables |
-| `0xB800:0x0000` | `0x000B8000` | VGA Framebuffer (Mode 03h, 80x25 16-color text) |
-| `0x7000:0x0000` | `0x00070000` | Cache-as-RAM (CAR) temporary stack/data (32 KB, pre-DRAM phase) |
-| `0xF000:0x0000` | `0x000F0000` | Shadow RAM (64 KB write-protected DRAM mirror of ROM) |
+| `0x0000:0x0500` | `0x00000500` | Scratch RAM (`0x0500-0x05FF` zeroed; stores Host VID `0x0508`, Host DID `0x050A`, RAM bytes `0x0514`, VGA cursor `0x0500`) |
+| `0x0000:0x0600` | `0x00000600` | Low-RAM position-independent trampoline used during PAM0 shadow copy |
+| `0x0000:0x7000` | `0x00007000` | Post-DRAM boot stack range in DRAM; initial `SP=0x7C00`, grows downward |
+| `0x2000:0x0000` | `0x00020000` | Temporary 64 KB staging DRAM buffer used while copying ROM to Shadow RAM |
+| `0x7000:0x0000` | `0x00070000` | Cache-as-RAM (CAR) temporary stack/scratch (`0x70000-0x77FFF`, 32 KB, pre-DRAM phase, initial `SP=0x8000`) |
+| `0xB800:0x0000` | `0x000B8000` | VGA Text Buffer (used for Boot ROM messages when VGA RAM decode is enabled) |
+| `0xF000:0x0000` | `0x000F0000` | Shadow RAM (64 KB write-protected DRAM mirror of top 64 KB ROM bank) |
 
-### Contract 2: Handover to Firmware Payload
-At the completion of Boot ROM initialization, control is transferred to the firmware:
+### Handover to Firmware Payload
+At the completion of Boot ROM initialization, control is transferred to the payload in Shadow RAM:
 - **CPU Mode:** 16-bit Real Mode
-- **Entry Point (`CS:IP`):** `0xF000:0x0004` (in write-protected Shadow RAM)
-- **Signature (`0xF000:0x0000`):** Must contain `'I', 'P', 'O'` (`0x004F5049`)
-- **Segments (`DS, ES`):** `0x0000`
-- **Stack (`SS:SP`):** `0x0000:0x7C00` (stack range `0x7000-0x7C00`, below MBR buffer)
+- **Entry Point (`CS:IP`):** `0xF000:0x000C` (in write-protected Shadow RAM)
+- **Signature (`0xF000:0x0000`):** Must match 12 ASCII bytes `"IPO_Firmware"` or `"IPO_Boot_ROM"`
+- **Segments (`DS, ES, SS`):** `0x0000`
+- **Stack (`SS:SP`):** `0x0000:0x7C00` (grows downward)
 - **Interrupts (`IF`):** `0` (`cli`, disabled until IVT is registered by firmware)
-- **Hardware State:** Host chipset detected, DRAM trained and active via MRC, PIC/PIT initialized, PAM0 locked Read-Only.
-
----
-
-## ⚡ Physical Hardware & Flashing Guide
-
-### Flashing with `flashrom`
-> [!CAUTION]
-> **Always dump and verify two identical backups before flashing physical hardware!**
-> Set `PROGRAMMER` to the programmer interface supported by your hardware.
-> ```bash
-> flashrom -p "$PROGRAMMER" -r backup1.bin
-> flashrom -p "$PROGRAMMER" -r backup2.bin
-> cmp backup1.bin backup2.bin || echo "Flash read unstable! Check clamp and wiring!"
-> ```
-
-```bash
-# Build ROM image (default 4MB, or specify FLASH_SIZE):
-make FLASH_SIZE=4M
-
-# Write to physical flash using a supported programmer:
-flashrom -p "$PROGRAMMER" -w build/bootrom.bin
-```
+- **Hardware State:** Host bridge detected (`0x0508`/`0x050A`), DRAM initialized via MRC (`0x0514`), MTRRs set (DRAM `0x00000000-0xDFFFFFFF` WB, MMIO `0xE0000000-0xFFFFFFFF` UC), COM1/PIC/PIT initialized, PAM0 locked Read-Only (`PAM_RE`).
 
 ---
 
 ## 🚦 POST Diagnostic Port 0x80 Codes
 
-A standard 2-digit LPC/PCI POST card connected to port `0x80` reports boot progress:
+`IPO_Boot_ROM` writes the following checkpoints to diagnostic port `0x80` (`POST_PORT` in `include/contract.inc`):
 
-| Hex Code | Checkpoint / Milestone | Status |
+| Hex Code | Symbol / Checkpoint | Status |
 | :---: | :--- | :---: |
-| `0x10` | CPU Reset Vector reached (`0xFFFFFFF0`) | Progress |
-| `0x11` | Entered Boot_ROM initialization code (`0xF000:0x8000`) | Progress |
-| `0x12` | MTRR Cache-as-RAM (CAR) setup started | Progress |
-| `0x13` | CAR stack operational at `0x7000:0x8000` (NEM enabled) | Progress |
-| `0x14` | PCI chipset probing started | Progress |
-| `0x15` | Supported chipset detected | Progress |
-| `0x16` | Memory Reference Code (MRC) DRAM training started | Progress |
-| `0x17` | DRAM sanity pattern test passed (`0x55AA55AA` / `0xAA55AA55`) | Progress |
-| `0x18` | CAR teardown complete (`wbinvd`, MTRRs restored, stack in DRAM) | Progress |
-| `0x19` | Cascaded 8259 PIC and 8254 PIT (18.2 Hz) initialized | Progress |
-| `0x1A` | COM1 UART initialized (115200 baud, 8N1) | Progress |
-| `0x1B` | ROM copied to DRAM Shadow RAM (`0xF0000..0xFFFFF`) | Progress |
-| `0x1C` | PAM locked read-only (`RE=1, WE=0`) | Progress |
-| `0x1D` | Firmware header magic (`'IPO'`) validated | Progress |
-| `0x1E` | Far jump to Firmware payload (`0xF000:0x0004`) | Progress |
-| `0x1F` | Warning: SMBus SPD read failed, fallback to CMOS/default RAM geometry | Warning |
-| **`0x2E`** | **ERROR:** CPU lacks MTRR support or CAR configuration failed | **Error** |
-| **`0x3E`** | **ERROR:** Unsupported chipset / unknown PCI Host Bridge ID | **Error** |
-| **`0x4E`** | **ERROR:** DRAM memory pattern test failed | **Error** |
-| **`0x7E`** | **ERROR:** Firmware signature mismatch (`'IPO'` expected) | **Error** |
+| `0x12` | `POST_CAR_START` — MTRR Cache-as-RAM (CAR) setup and cache-line warmup started (`car.asm`) | Progress |
+| `0x13` | `POST_CAR_OK` — CAR stack operational at `0x7000:0x8000` (`car.asm`) | Progress |
+| `0x1F` | `POST_WARN_SPD_FAIL` — Warning: SMBus SPD read returned 0 MB; falling back to CMOS (`0x34/0x35`, `0x17/0x18`) or `64 MB` default (`mrc.asm`) | Warning |
+| **`0x2E`** | **`POST_ERR_NO_CAR` — ERROR: CPU lacks MTRR support (`CPUID.1:EDX[12] = 0`); system halted (`car.asm`)** | **Error** |
 
 ## 🧑‍💻 Authors
 

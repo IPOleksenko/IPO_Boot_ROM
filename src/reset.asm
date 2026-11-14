@@ -1,17 +1,4 @@
-; reset.asm — x86 Reset Vector (exactly 16 bytes)
-; Located at physical address 0xFFFFFFF0. Its file offset is FLASH_SIZE - 16
-; (0x3FFF0 in a 256 KiB image).
-;
-; On x86 CPU reset:
-;   CS selector = 0xF000, hidden base = 0xFFFF0000, IP = 0xFFF0
-;   First instruction executed is at 0xFFFF0000 + 0xFFF0 = 0xFFFFFFF0.
-;
-; The far jump resets the hidden base of CS to 0xF000 * 16 = 0x000F0000,
-; enabling normal 16-bit real mode execution in the 1MB address space.
-;
-; On x86 PC host bridges, PAM registers default to 0x00 at reset,
-; which routes reads from 0xF0000-0xFFFFF to PCI/ROM. This means the far
-; jump successfully fetches code from ROM even before any host bridge init.
+; reset.asm — x86 Reset Vector (16 bytes at physical 0xFFFFFFF0)
 
 BITS 16
 ORG 0xFFF0
@@ -21,13 +8,11 @@ ORG 0xFFF0
 reset_vector:
     jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 bytes: EA 00 80 00 F0
 
-    ; BIOS date string (8 bytes: MM/DD/YY) + system model byte + submodel + checksum
-    db      '09/12/26'                      ; 8 bytes
-    db      0xFC                            ; System model byte (PC-AT)
+    db      '09/12/26'                      ; BIOS release date (8 bytes)
+    db      0xFC                            ; PC-AT system model byte
     db      0x00                            ; Submodel byte
     db      0x00                            ; Checksum / padding byte
 
-    ; Verify that reset vector is exactly 16 bytes
 %if ($ - reset_vector) != 16
     %error "Reset vector must be exactly 16 bytes!"
 %endif

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_rom.sh — Constructs a single fixed-size Boot ROM binary for physical hardware and emulation.
+build_rom.py — Constructs a single fixed-size Boot ROM binary for physical hardware and emulation.
 Supports any standard or non-standard flash chip sizes (64K, 128K, 256K, 384K, 512K, 1M, 1.5M, 2M, 3M, 4M, 5M, 8M, 12M, 16M, hex, bytes, etc.).
 """
 
@@ -93,11 +93,11 @@ def main():
                 with open(alt_bin, "rb") as f:
                     fw_data = f.read()
                 fw_size = len(fw_data)
-            elif fw_data[:3] == b"IPO":
-                print(f"[build_rom] Extracting 32KB payload starting with 'IPO' from '{fw_bin}'...")
+            elif fw_data[:12] in (b"IPO_Firmware", b"IPO_Boot_ROM"):
+                print(f"[build_rom] Extracting 32KB payload from '{fw_bin}'...")
                 fw_data = fw_data[:32768]
                 fw_size = len(fw_data)
-            elif fw_size >= 65536 and fw_data[fw_size - 65536 : fw_size - 65536 + 3] == b"IPO":
+            elif fw_size >= 65536 and fw_data[fw_size - 65536 : fw_size - 65536 + 12] in (b"IPO_Firmware", b"IPO_Boot_ROM"):
                 print(f"[build_rom] Extracting 32KB payload from 64KB bank of '{fw_bin}'...")
                 fw_data = fw_data[fw_size - 65536 : fw_size - 32768]
                 fw_size = len(fw_data)

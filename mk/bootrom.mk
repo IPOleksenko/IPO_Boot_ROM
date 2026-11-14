@@ -43,15 +43,12 @@ $(FW_STAMP):
 	@touch $@
 
 # Single unified Boot ROM binary for physical hardware and emulation
-$(BOOTROM_BIN): $(BIN)/init.bin $(BIN)/reset.bin $(TOOLS)/build_rom.sh $(CONFIG_STAMP) $(FW_STAMP) $(FW_PAYLOAD)
+$(BOOTROM_BIN): $(BIN)/init.bin $(BIN)/reset.bin $(TOOLS)/build_rom.py $(CONFIG_STAMP) $(FW_STAMP) $(FW_PAYLOAD)
 	@mkdir -p $(BUILD)
 	@if [ ! -f "$(FW_PAYLOAD)" ]; then \
 		echo "ERROR: Firmware payload '$(FW_PAYLOAD)' not found!" >&2; \
 		exit 1; \
 	fi; \
-	$(TOOLS)/build_rom.sh "$(FLASH_SIZE)" "$(FW_PAYLOAD)" $(BIN)/init.bin $(BIN)/reset.bin $@
+	$(TOOLS)/build_rom.py "$(FLASH_SIZE)" "$(FW_PAYLOAD)" $(BIN)/init.bin $(BIN)/reset.bin $@
 
-# Alias for backwards compatibility
-spi-flash: $(BOOTROM_BIN)
-
-.PHONY: bootrom spi-flash
+.PHONY: bootrom

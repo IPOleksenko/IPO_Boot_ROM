@@ -1,20 +1,13 @@
 ; payload.asm — Built-in diagnostic payload for IPO_Boot_ROM
-; Embedded in the firmware slot and executed from shadow RAM at 0xF000:0x0000.
-; Initializes VGA text mode 03h and displays the standalone Boot ROM screen.
+; Executed from shadow RAM at 0xF000:0x0000 when no external firmware is embedded.
 
 BITS 16
 ORG 0x0000
 
 %include "contract.inc"
 
-; =============================================================================
-; Offset 0x0000: 4-byte Magic Signature
-; =============================================================================
-dd      FW_MAGIC                        ; 0x004F5049 ("IPO")
+db      "IPO_Boot_ROM"
 
-; =============================================================================
-; Offset 0x0004: Entry Point
-; =============================================================================
 entry_point:
     cli
     cld
@@ -23,31 +16,21 @@ entry_point:
     mov     ds, ax
     mov     es, ax
 
-    ; 1. Print test marker to COM1 (0x3F8)
     mov     si, msg_stub_serial
     call    serial_print
 
-    ; 2. Initialize VGA Hardware into Mode 03h (80x25 color text)
     call    vga_hardware_init
-
-    ; 3. Clear VGA text buffer
     call    vga_clear_screen
-
-    ; 4. Render Standalone Boot ROM Screen
     call    bootrom_render_screen
 
-    ; 5. Print success marker to COM1
     mov     si, msg_stub_halt
     call    serial_print
-
 
 .halt:
     hlt
     jmp     .halt
 
-; =============================================================================
-; VGA Render Routine
-; =============================================================================
+; Render standalone diagnostic screen in VGA text buffer
 bootrom_render_screen:
     push    es
     push    si
@@ -57,61 +40,51 @@ bootrom_render_screen:
     mov     ax, VGA_TEXT_SEG
     mov     es, ax
 
-    ; Row 0 Left (Col 0): "IPO_Boot_ROM" (attribute 0x0A: Light Green)
     xor     di, di
     mov     si, str_title
     mov     ah, 0x0A
     call    .draw_str
 
-    ; Row 0 Right (Col 66): "by IPOleksenko" (attribute 0x0A)
     mov     di, 132
     mov     si, str_author
     mov     ah, 0x0A
     call    .draw_str
 
-    ; Row 2 (Col 0): CPU reset vector
     mov     di, 2 * 160
     mov     si, str_line1
     mov     ah, 0x07
     call    .draw_str
 
-    ; Row 3 (Col 0): Stack
     mov     di, 3 * 160
     mov     si, str_line2
     mov     ah, 0x07
     call    .draw_str
 
-    ; Row 4 (Col 0): UART COM1
     mov     di, 4 * 160
     mov     si, str_line3
     mov     ah, 0x07
     call    .draw_str
 
-    ; Row 5 (Col 0): VGA
     mov     di, 5 * 160
     mov     si, str_line4
     mov     ah, 0x07
     call    .draw_str
 
-    ; Row 6 (Col 0): ROM mapping
     mov     di, 6 * 160
     mov     si, str_line5
     mov     ah, 0x07
     call    .draw_str
 
-    ; Row 7 (Col 0): Hardware diagnostics
     mov     di, 7 * 160
     mov     si, str_line6
-    mov     ah, 0x0B                        ; Light Cyan
+    mov     ah, 0x0B
     call    .draw_str
 
-    ; Row 9 (Col 0): Standalone status
     mov     di, 9 * 160
     mov     si, str_line7
-    mov     ah, 0x0E                        ; Yellow
+    mov     ah, 0x0E
     call    .draw_str
 
-    ; Row 10 (Col 0): System halted
     mov     di, 10 * 160
     mov     si, str_line8
     mov     ah, 0x07
@@ -132,9 +105,7 @@ bootrom_render_screen:
 .draw_done:
     ret
 
-; =============================================================================
-; VGA Mode 03h Hardware Initialization
-; =============================================================================
+; Configure standard VGA Mode 03h (80x25 text) registers, font, and palette
 vga_hardware_init:
     push    es
     push    ds
@@ -144,12 +115,12 @@ vga_hardware_init:
     push    dx
     push    ax
 
-    ; 1. Misc Output Register (Port 0x3C2)
+    ; Miscellaneous Output Register (28 MHz clock, color I/O at 0x3D4, RAM enabled)
     mov     dx, 0x03C2
-    mov     al, 0x67                        ; 28MHz, color mode (0x3D4), enable RAM
+    mov     al, 0x67
     out     dx, al
 
-    ; 2. Sequencer Registers (Port 0x3C4 / 0x3C5)
+    ; Sequencer registers
     mov     dx, 0x03C4
     mov     si, vga_seq_data
     mov     cx, 5
@@ -164,7 +135,7 @@ vga_hardware_init:
     inc     ah
     loop    .loop_seq
 
-    ; 3. CRTC: Unlock CRTC registers 0..7 (clear bit 7 of reg 0x11)
+    ; Unlock CRTC registers 0..7 (clear bit 7 of CRTC reg 0x11)
     mov     dx, 0x03D4
     mov     al, 0x11
     out     dx, al
@@ -174,7 +145,6 @@ vga_hardware_init:
     out     dx, al
     dec     dx
 
-    ; Write all 25 CRTC registers (Port 0x3D4 / 0x3D5)
     mov     si, vga_crtc_data
     mov     cx, 25
     xor     ah, ah
@@ -188,7 +158,7 @@ vga_hardware_init:
     inc     ah
     loop    .loop_crtc
 
-    ; 4. Graphics Controller Registers (Port 0x3CE / 0x3CF)
+    ; Graphics Controller registers
     mov     dx, 0x03CE
     mov     si, vga_gc_data
     mov     cx, 9
@@ -203,24 +173,23 @@ vga_hardware_init:
     inc     ah
     loop    .loop_gc
 
-    ; 5. Load 8x16 Font into Plane 2 (0xA0000)
+    ; Map Plane 2 at 0xA0000 and load 8x16 font
     mov     dx, 0x03C4
-    mov     ax, 0x0100                      ; Synchronous reset
+    mov     ax, 0x0100
     out     dx, ax
-    mov     ax, 0x0402                      ; Plane 2 write enable (bit 2)
+    mov     ax, 0x0402
     out     dx, ax
-    mov     ax, 0x0704                      ; Sequential addressing
+    mov     ax, 0x0704
     out     dx, ax
-    mov     ax, 0x0300                      ; Clear reset
+    mov     ax, 0x0300
     out     dx, ax
 
     mov     dx, 0x03CE
-    mov     ax, 0x0005                      ; Write mode 0
+    mov     ax, 0x0005
     out     dx, ax
-    mov     ax, 0x0406                      ; Map memory to 0xA0000 (64KB)
+    mov     ax, 0x0406
     out     dx, ax
 
-    ; Copy 256 characters * 16 bytes into ES:DI (0xA000:0x0000)
     mov     ax, 0xA000
     mov     es, ax
     xor     di, di
@@ -228,33 +197,32 @@ vga_hardware_init:
     mov     cx, 256
 .loop_font:
     push    cx
-    mov     cx, 8                           ; 8 words = 16 bytes
+    mov     cx, 8
     rep     movsw
-    add     di, 16                          ; Next character slot in 32-byte stride
+    add     di, 16
     pop     cx
     loop    .loop_font
 
-    ; Restore Sequencer to normal text mode (Planes 0 & 1, odd/even enabled)
+    ; Restore Sequencer and Graphics Controller to text mode (Planes 0 & 1 at 0xB8000)
     mov     dx, 0x03C4
     mov     ax, 0x0100
     out     dx, ax
-    mov     ax, 0x0302                      ; Planes 0 & 1 enable
+    mov     ax, 0x0302
     out     dx, ax
-    mov     ax, 0x0304                      ; Odd/even mode enable
+    mov     ax, 0x0304
     out     dx, ax
     mov     ax, 0x0300
     out     dx, ax
 
-    ; Restore GC to normal text mode (0xB8000)
     mov     dx, 0x03CE
-    mov     ax, 0x1005                      ; Odd/even mode
+    mov     ax, 0x1005
     out     dx, ax
-    mov     ax, 0x0E06                      ; Map memory to 0xB8000
+    mov     ax, 0x0E06
     out     dx, ax
 
-    ; 6. Attribute Controller Registers (Port 0x3C0)
+    ; Attribute Controller registers
     mov     dx, 0x03DA
-    in      al, dx                          ; Reset flip-flop
+    in      al, dx
 
     mov     dx, 0x03C0
     mov     si, vga_ac_data
@@ -268,7 +236,7 @@ vga_hardware_init:
     inc     ah
     loop    .loop_ac
 
-    ; 7. Initialize DAC Palette (256 standard VGA colors)
+    ; Load 256-color DAC palette
     mov     dx, 0x03C8
     xor     al, al
     out     dx, al
@@ -280,11 +248,11 @@ vga_hardware_init:
     out     dx, al
     loop    .loop_dac
 
-    ; 8. Enable Video Output (PAS bit in Attribute Controller)
+    ; Enable video output (PAS bit in Attribute Controller)
     mov     dx, 0x03DA
     in      al, dx
     mov     dx, 0x03C0
-    mov     al, 0x20                        ; Bit 5 = 1 (Enable Video / PAS)
+    mov     al, 0x20
     out     dx, al
 
     pop     ax
@@ -306,7 +274,7 @@ vga_clear_screen:
     mov     es, ax
     xor     di, di
     mov     cx, 80 * 25
-    mov     ax, 0x0720                      ; Space (0x20) with attribute 0x07
+    mov     ax, 0x0720
     rep     stosw
 
     pop     ax
@@ -315,21 +283,26 @@ vga_clear_screen:
     pop     es
     ret
 
-; =============================================================================
-; Serial Print Routines
-; =============================================================================
 serial_tx_char:
     push    dx
     push    ax
+    push    cx
     mov     ah, al
     mov     dx, COM1_PORT + 5
+    mov     cx, 0xFFFF
 .wait:
     in      al, dx
     test    al, 0x20
-    jz      .wait
+    jnz     .ready
+    dec     cx
+    jnz     .wait
+    jmp     .done
+.ready:
     mov     al, ah
     mov     dx, COM1_PORT
     out     dx, al
+.done:
+    pop     cx
     pop     ax
     pop     dx
     ret
@@ -355,9 +328,6 @@ serial_print:
     pop     si
     ret
 
-; =============================================================================
-; VGA Mode 03h Tables & Assets
-; =============================================================================
 vga_seq_data    db 0x03, 0x00, 0x03, 0x00, 0x02
 vga_crtc_data   db 0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F
                 db 0x00, 0x4F, 0x0D, 0x0E, 0x00, 0x00, 0x00, 0x00
