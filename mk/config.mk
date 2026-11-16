@@ -1,21 +1,15 @@
-# =============================================================================
-#                     TOOLS
-# =============================================================================
+# Toolchain and emulator binaries
 
 ASM     := nasm
+CC      := gcc
+LD      := ld
+OBJCOPY := objcopy
 QEMU    := qemu-system-i386
 
-# =============================================================================
-#                 TARGET FLASH CHIP GEOMETRY
-# =============================================================================
+# Flash chip geometry (default 4 MiB SPI flash; 256 KiB for parallel EEPROM)
+FLASH_SIZE  ?= 4MiB
 
-# Physical SPI flash chip size (default: 4M for physical SPI flash like W25Q32;
-# use FLASH_SIZE=256K for vintage 256KB parallel flash / PLCC32 EEPROM)
-FLASH_SIZE  ?= 4M
-
-# =============================================================================
-#                 PROJECT DIRECTORIES
-# =============================================================================
+# Project directories
 
 SRC     := src
 BUILD   := build
@@ -23,44 +17,42 @@ BIN     := $(BUILD)/.bin
 INC     := include
 TOOLS   := tools
 
-# =============================================================================
-#                 OUTPUT ARTIFACT (Single unified ROM binary)
-# =============================================================================
+# Output image
 
 BOOTROM_BIN := $(BUILD)/bootrom.bin
 TARGET_ROM  := $(BOOTROM_BIN)
 
-# =============================================================================
-#                 FLAGS
-# =============================================================================
+# Compiler and assembler flags
 
 ASM_FLAGS := -f bin -I$(INC) -I$(SRC)
+ASM_ELF_FLAGS := -f elf32 -I$(INC) -I$(SRC)
+ROMSTAGE_CFLAGS := -m32 -march=i386 -mtune=generic -mno-sse -mno-mmx -Os \
+	-ffreestanding -fno-pic -fno-pie -fno-builtin -nostdlib -nostartfiles \
+	-fno-asynchronous-unwind-tables -fno-unwind-tables -Wall -Wextra -I$(SRC)
 
-# =============================================================================
-#                 EMULATION RUN ARGUMENTS
-# =============================================================================
+# Emulator arguments
 
-# Firmware binary to embed into ROM (optional: make run FIRMWARE=/path/to/firmware.bin)
+# Optional external firmware binary (FIRMWARE=/path/to/fw.bin)
 FIRMWARE ?=
 
-# Target OS storage media (optional: make run OS=/path/to/disk.img)
+# Optional OS disk image (OS=/path/to/disk.img)
 OS       ?=
 CPU      ?= pentium3
 MEM      ?= 512
 
-# QEMU machine type (default: pc = i440FX; use MACHINE=q35 for Q35)
+# Machine profile (default: pc for legacy host bridge, or PCIe host bridge)
 MACHINE ?= pc
 
-# Base QEMU flags for running Boot ROM
+# Base emulator flags
 QEMU_FLAGS := -M $(MACHINE) -cpu $(CPU) -m $(MEM) -bios $(TARGET_ROM) -serial stdio
 
-# Audio configuration for PC Speaker
+# PC speaker audio backend
 AUDIO ?= pa
 ifneq ($(AUDIO),none)
 QEMU_FLAGS += -audiodev $(AUDIO),id=pa -machine pcspk-audiodev=pa
 endif
 
-# If an OS storage media image is supplied, attach it according to DRIVE_TYPE (ide, ahci, nvme, or usb)
+# Attach OS disk image using DRIVE_TYPE (ide, ahci, nvme, or usb)
 ifneq ($(OS),)
 DRIVE_TYPE ?= ide
 ifeq ($(DRIVE_TYPE),ahci)

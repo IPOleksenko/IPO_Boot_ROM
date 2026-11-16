@@ -1,5 +1,5 @@
-; payload.asm — Built-in diagnostic payload for IPO_Boot_ROM
-; Executed from shadow RAM at 0xF000:0x0000 when no external firmware is embedded.
+; Built-in diagnostic payload executed from shadow RAM (0xF000:0x0000)
+; when no external firmware binary is embedded.
 
 BITS 16
 ORG 0x0000
@@ -30,7 +30,7 @@ entry_point:
     hlt
     jmp     .halt
 
-; Render standalone diagnostic screen in VGA text buffer
+; Render diagnostic banner to VGA text buffer
 bootrom_render_screen:
     push    es
     push    si
@@ -105,7 +105,7 @@ bootrom_render_screen:
 .draw_done:
     ret
 
-; Configure standard VGA Mode 03h (80x25 text) registers, font, and palette
+; Program VGA Mode 03h (80x25 text), 8x16 font, and DAC palette
 vga_hardware_init:
     push    es
     push    ds
@@ -115,7 +115,7 @@ vga_hardware_init:
     push    dx
     push    ax
 
-    ; Miscellaneous Output Register (28 MHz clock, color I/O at 0x3D4, RAM enabled)
+    ; Misc Output: 28 MHz clock, 0x3D4 CRTC I/O, RAM enabled
     mov     dx, 0x03C2
     mov     al, 0x67
     out     dx, al

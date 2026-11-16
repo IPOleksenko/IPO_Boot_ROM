@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
-"""
-build_rom.py — Constructs a single fixed-size Boot ROM binary for physical hardware and emulation.
-Supports any standard or non-standard flash chip sizes (64K, 128K, 256K, 384K, 512K, 1M, 1.5M, 2M, 3M, 4M, 5M, 8M, 12M, 16M, hex, bytes, etc.).
+"""Assemble a flashable boot ROM image.
+
+Layout for FLASH_SIZE >= 128 KiB (e.g. 128 KiB, 256 KiB, 512 KiB, 1 MiB, 4 MiB, 16 MiB):
+  - [0x00000000 .. romstage_size)     : 32-bit Flash-XIP romstage (phys 4 GiB - FLASH_SIZE)
+  - [romstage_end .. fw_offset)       : Optional extended firmware (>56 KiB..64 KiB - 16 B)
+  - [flash_size - 65536 .. -8192)     : 56 KiB firmware bank slot (0xF000:0000..0xDFFF)
+  - [flash_size - 8192 .. -16)        : 8 KiB 16-bit bootblock init.bin (0xF000:0xE000..0xFFEF)
+  - [flash_size - 16 .. flash_size)   : 16 B hardware reset vector reset.bin (0xFFFFFFF0)
 """
 
-import sys
+import argparse
 import os
+import struct
+import sys
+
 
 def parse_size(val):
-    """
-    Parses any flash size string (standard or non-standard) into byte count.
-    Supports:
-      - Units: B, K, KB, KiB, M, MB, MiB, G, GB, GiB (case-insensitive)
-      - Non-power-of-two / non-standard sizes: 384K, 768K, 3M, 5M, 12M, etc.
-      - Decimals / floats: 1.5M, 2.5MB, 0.5M, etc.
-      - Hexadecimal: 0x400000, 0x100000, 0x80000, 0x10000, etc.
-      - Plain integers: 4194304, 262144, 65536, etc.
-    """
     if isinstance(val, int):
         return val
     s = str(val).strip()
@@ -25,18 +24,7 @@ def parse_size(val):
 
     s_upper = s.upper()
     multipliers = [
-        ("GIB", 1024**3),
-        ("MIB", 1024**2),
-        ("KIB", 1024),
-        ("GB", 1024**3),
-        ("MB", 1024**2),
-        ("KB", 1024),
-        ("G", 1024**3),
-        ("M", 1024**2),
-        ("K", 1024),
-        ("BYTES", 1),
-        ("BYTE", 1),
-        ("B", 1),
+        ("GIB", 1024**3), ("MIB", 1024**2), ("KIB", 1024), ("B", 1),
     ]
     for suffix, mult in multipliers:
         if s_upper.endswith(suffix):
@@ -49,102 +37,132 @@ def parse_size(val):
         return int(float(s))
     return int(s)
 
-def main():
-    if len(sys.argv) < 6:
-        print(f"Usage: {sys.argv[0]} <FLASH_SIZE> <FW_BIN> <INIT_BIN> <RESET_BIN> <OUTPUT_ROM>", file=sys.stderr)
-        sys.exit(1)
 
-    flash_size_str = sys.argv[1]
-    fw_bin = sys.argv[2]
-    init_bin = sys.argv[3]
-    reset_bin = sys.argv[4]
-    output_rom = sys.argv[5]
+def main():
+    parser = argparse.ArgumentParser(description="Build IPO_Boot_ROM binary image")
+    parser.add_argument("flash_size", help="Flash chip size (e.g. 128KiB, 256KiB, 4MiB)")
+    parser.add_argument("fw_bin", help="Firmware payload binary")
+    parser.add_argument("init_bin", help="16-bit Bootblock init.bin")
+    parser.add_argument("reset_bin", help="16-byte x86 reset.bin")
+    parser.add_argument("output_rom", help="Output bootrom.bin path")
+    parser.add_argument("--romstage", default=None, help="Optional 32-bit Flash-XIP romstage.bin")
+    args = parser.parse_args()
 
     try:
-        flash_size = parse_size(flash_size_str)
+        flash_size = parse_size(args.flash_size)
     except Exception as e:
-        print(f"ERROR: Invalid FLASH_SIZE '{flash_size_str}': {e}", file=sys.stderr)
+        print(f"ERROR: Invalid FLASH_SIZE '{args.flash_size}': {e}", file=sys.stderr)
         sys.exit(1)
 
+    if flash_size < 131072 and args.romstage:
+        print(f"ERROR: FLASH_SIZE must be >= 128KiB when 32-bit romstage is enabled, got {flash_size} B", file=sys.stderr)
+        sys.exit(1)
     if flash_size < 65536:
-        print(f"ERROR: FLASH_SIZE must be at least 64K (65536 bytes) to accommodate firmware payload and bootrom init, got {flash_size}", file=sys.stderr)
+        print(f"ERROR: FLASH_SIZE must be at least 64KiB, got {flash_size} B", file=sys.stderr)
         sys.exit(1)
-
     if flash_size % 16 != 0:
-        print(f"ERROR: FLASH_SIZE ({flash_size}) must be aligned to at least 16 bytes (x86 reset vector requirement)!", file=sys.stderr)
+        print(f"ERROR: FLASH_SIZE ({flash_size}) must be 16-byte aligned!", file=sys.stderr)
         sys.exit(1)
 
-    # Offsets relative to the end of the ROM image:
+    flash_phys_base = 0x100000000 - flash_size
     fw_offset = flash_size - 65536
-    init_offset = flash_size - 32768
+    init_offset = flash_size - 8192
     reset_offset = flash_size - 16
+    bank_fw_max = init_offset - fw_offset  # 56 KiB
 
     rom = bytearray(b"\xFF" * flash_size)
 
-    # 1. Embed Firmware payload (up to 32 KB)
-    if fw_bin and os.path.isfile(fw_bin):
-        with open(fw_bin, "rb") as f:
+    # Place 32-bit Flash-XIP romstage at offset 0 (phys 4 GiB - flash_size)
+    romstage_paddr = 0
+    romstage_size = 0
+    romstage_end = 0
+    if args.romstage:
+        if not os.path.isfile(args.romstage):
+            print(f"ERROR: romstage binary '{args.romstage}' not found!", file=sys.stderr)
+            sys.exit(1)
+        with open(args.romstage, "rb") as f:
+            rs_data = f.read()
+        romstage_size = len(rs_data)
+        if romstage_size > fw_offset:
+            print(f"ERROR: romstage ({romstage_size} bytes) exceeds space below 0xFFFF0000 ({fw_offset} bytes)!", file=sys.stderr)
+            sys.exit(1)
+        rom[0:romstage_size] = rs_data
+        romstage_paddr = flash_phys_base
+        romstage_end = (romstage_size + 15) & ~15
+        print(f"[build_rom] Embedding 32-bit romstage: {args.romstage} ({romstage_size} bytes) at phys 0x{romstage_paddr:08X}")
+
+    # Place firmware payload (<=56 KiB in 0xF000 bank, or >56 KiB..64 KiB - 16 B staged)
+    fw_ext_paddr = 0
+    fw_ext_size = 0
+    if args.fw_bin and os.path.isfile(args.fw_bin):
+        with open(args.fw_bin, "rb") as f:
             fw_data = f.read()
         fw_size = len(fw_data)
-        if fw_size > 32768:
-            alt_bin = os.path.join(os.path.dirname(fw_bin), ".bin", os.path.basename(fw_bin))
-            if os.path.isfile(alt_bin) and os.path.getsize(alt_bin) <= 32768:
-                print(f"[build_rom] Note: '{fw_bin}' is a full image ({fw_size} bytes). Using intermediate payload '{alt_bin}'...")
-                with open(alt_bin, "rb") as f:
-                    fw_data = f.read()
-                fw_size = len(fw_data)
-            elif fw_data[:12] in (b"IPO_Firmware", b"IPO_Boot_ROM"):
-                print(f"[build_rom] Extracting 32KB payload from '{fw_bin}'...")
-                fw_data = fw_data[:32768]
-                fw_size = len(fw_data)
-            elif fw_size >= 65536 and fw_data[fw_size - 65536 : fw_size - 65536 + 12] in (b"IPO_Firmware", b"IPO_Boot_ROM"):
-                print(f"[build_rom] Extracting 32KB payload from 64KB bank of '{fw_bin}'...")
-                fw_data = fw_data[fw_size - 65536 : fw_size - 32768]
+        if fw_size > 65520:
+            if fw_size >= 65536 and fw_data[fw_size - 65536 : fw_size - 65536 + 12] in (b"IPO_Firmware", b"IPO_Boot_ROM"):
+                print(f"[build_rom] Extracting 56 KiB bank payload from full ROM image '{args.fw_bin}'...")
+                fw_data = fw_data[fw_size - 65536 : fw_size - 8192]
                 fw_size = len(fw_data)
             else:
-                print(f"ERROR: Firmware payload '{fw_bin}' ({fw_size} bytes) exceeds 32 KB slot!", file=sys.stderr)
+                print(f"ERROR: Firmware '{args.fw_bin}' ({fw_size} B) exceeds 65520 B shadow limit!", file=sys.stderr)
                 sys.exit(1)
-        rom[fw_offset:fw_offset + fw_size] = fw_data
-        print(f"[build_rom] Embedding Firmware: {fw_bin} ({fw_size} bytes) at offset 0x{fw_offset:08X}")
-    else:
-        print(f"[build_rom] No Firmware binary provided; leaving slot at offset 0x{fw_offset:08X} as 0xFF")
 
-    # 2. Embed Boot_ROM init code
-    if not os.path.isfile(init_bin):
-        print(f"ERROR: Init binary '{init_bin}' not found!", file=sys.stderr)
+        if fw_size <= bank_fw_max:
+            rom[fw_offset:fw_offset + fw_size] = fw_data
+            print(f"[build_rom] Embedding Firmware in bank: {args.fw_bin} ({fw_size} B) at offset 0x{fw_offset:08X}")
+        else:
+            if romstage_end + fw_size > fw_offset:
+                print(f"ERROR: Not enough Flash space below 0xFFFF0000 for extended firmware ({fw_size} B)!", file=sys.stderr)
+                sys.exit(1)
+            rom[romstage_end:romstage_end + fw_size] = fw_data
+            # Mirror magic header into the 0xF000 bank slot
+            rom[fw_offset:fw_offset + 12] = fw_data[:12]
+            fw_ext_paddr = flash_phys_base + romstage_end
+            fw_ext_size = fw_size
+            print(f"[build_rom] Embedding Extended Firmware (>56 KiB): {args.fw_bin} ({fw_size} B) at phys 0x{fw_ext_paddr:08X}")
+    else:
+        print(f"[build_rom] No Firmware binary provided; leaving bank slot as 0xFF")
+
+    # Place 16-bit bootblock and patch IPORST01 descriptor
+    if not os.path.isfile(args.init_bin):
+        print(f"ERROR: Init binary '{args.init_bin}' not found!", file=sys.stderr)
         sys.exit(1)
-    with open(init_bin, "rb") as f:
-        init_data = f.read()
+    with open(args.init_bin, "rb") as f:
+        init_data = bytearray(f.read())
     init_size = len(init_data)
     max_init_size = reset_offset - init_offset
     if init_size > max_init_size:
-        print(f"ERROR: Boot_ROM init ({init_size} bytes) overflows into Reset Vector (max {max_init_size} bytes)!", file=sys.stderr)
+        print(f"ERROR: Bootblock init ({init_size} bytes) overflows 8 KiB slot (max {max_init_size} bytes)!", file=sys.stderr)
         sys.exit(1)
+
+    hdr_idx = init_data.find(b"IPORST01")
+    if hdr_idx < 0:
+        print("ERROR: init.bin missing 'IPORST01' patch header!", file=sys.stderr)
+        sys.exit(1)
+    struct.pack_into("<IIII", init_data, hdr_idx + 8,
+                     romstage_paddr, romstage_size, fw_ext_paddr, fw_ext_size)
+
     rom[init_offset:init_offset + init_size] = init_data
-    print(f"[build_rom] Embedding Boot_ROM init: {init_bin} ({init_size} bytes) at offset 0x{init_offset:08X}")
+    print(f"[build_rom] Embedding Bootblock: {args.init_bin} ({init_size} bytes) at offset 0x{init_offset:08X}")
 
-    # 3. Embed Reset Vector (must be exactly 16 bytes)
-    if not os.path.isfile(reset_bin):
-        print(f"ERROR: Reset binary '{reset_bin}' not found!", file=sys.stderr)
+    # Place 16 B reset vector at the end of ROM
+    if not os.path.isfile(args.reset_bin):
+        print(f"ERROR: Reset binary '{args.reset_bin}' not found!", file=sys.stderr)
         sys.exit(1)
-    with open(reset_bin, "rb") as f:
+    with open(args.reset_bin, "rb") as f:
         reset_data = f.read()
-    reset_size = len(reset_data)
-    if reset_size != 16:
-        print(f"ERROR: reset.bin must be exactly 16 bytes, got {reset_size} bytes!", file=sys.stderr)
+    if len(reset_data) != 16:
+        print(f"ERROR: reset.bin must be 16 bytes, got {len(reset_data)}!", file=sys.stderr)
         sys.exit(1)
-    if reset_data[0] != 0xEA:
-        print(f"WARNING: Reset vector byte 0 is 0x{reset_data[0]:02X} (expected 0xEA for JMP FAR)!", file=sys.stderr)
     rom[reset_offset:reset_offset + 16] = reset_data
-    print(f"[build_rom] Embedding Reset Vector: {reset_bin} (16 bytes) at offset 0x{reset_offset:08X}")
+    print(f"[build_rom] Embedding Reset Vector: {args.reset_bin} (16 bytes) at offset 0x{reset_offset:08X}")
 
-    # 4. Write output ROM
-    os.makedirs(os.path.dirname(os.path.abspath(output_rom)), exist_ok=True)
-    with open(output_rom, "wb") as f:
+    os.makedirs(os.path.dirname(os.path.abspath(args.output_rom)), exist_ok=True)
+    with open(args.output_rom, "wb") as f:
         f.write(rom)
 
-    print(f"[build_rom] ROM successfully generated: {output_rom} ({len(rom)} bytes / {len(rom)/1024:.1f} KB / {len(rom)/(1024*1024):.2f} MB)")
-    print(f"[build_rom] Ready for physical flashrom programmer or QEMU emulation.")
+    print(f"[build_rom] ROM generated: {args.output_rom} ({len(rom)} B / {len(rom)/1024:.1f} KiB)")
+
 
 if __name__ == "__main__":
     main()

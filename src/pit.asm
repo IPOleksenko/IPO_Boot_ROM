@@ -1,5 +1,4 @@
-; pit.asm — 8254 Programmable Interval Timer initialization
-; Channel 0: System timer (~18.2 Hz), Channel 1: DRAM refresh (~66.3 kHz)
+; 8254 PIT init: ch0 system tick (~18.2 Hz), ch1 DRAM refresh (~66.3 kHz).
 
 BITS 16
 
@@ -9,7 +8,7 @@ pit_init:
     push    ax
     push    dx
 
-    ; Channel 0: Mode 2 (Rate Generator), 16-bit binary, divisor 0xFFFF (~18.2 Hz)
+    ; Ch0: mode 2 rate generator, divisor 0xFFFF (~18.2 Hz)
     mov     al, 0x34
     mov     dx, PIT_CMD
     out     dx, al
@@ -20,7 +19,7 @@ pit_init:
     mov     al, ah
     out     dx, al
 
-    ; Channel 1: Mode 2 (Rate Generator), LSB only, divisor 18 (~15 us DRAM refresh)
+    ; Ch1: mode 2 rate generator, LSB only, divisor 18 (~15 us refresh)
     mov     al, 0x54
     mov     dx, PIT_CMD
     out     dx, al

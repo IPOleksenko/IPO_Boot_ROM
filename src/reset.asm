@@ -1,4 +1,4 @@
-; reset.asm — x86 Reset Vector (16 bytes at physical 0xFFFFFFF0)
+; 16 B hardware reset vector at physical 0xFFFFFFF0
 
 BITS 16
 ORG 0xFFF0
@@ -6,9 +6,9 @@ ORG 0xFFF0
 %include "contract.inc"
 
 reset_vector:
-    jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 bytes: EA 00 80 00 F0
+    jmp     BOOTROM_SEG:BOOTROM_INIT_OFF    ; 5 B: far jmp EA 00 E0 00 F0
 
-    db      '09/12/26'                      ; BIOS release date (8 bytes)
+    db      '09/12/26'                      ; Release date (8 B)
     db      0xFC                            ; PC-AT system model byte
     db      0x00                            ; Submodel byte
     db      0x00                            ; Checksum / padding byte

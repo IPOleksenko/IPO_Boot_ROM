@@ -1,5 +1,4 @@
-; pic.asm — 8259A Programmable Interrupt Controller initialization
-; Master PIC: IRQ 0-7 -> INT 08h-0Fh, Slave PIC: IRQ 8-15 -> INT 70h-77h
+; 8259A PIC init: remap IRQ 0-7 -> INT 08h-0Fh, IRQ 8-15 -> INT 70h-77h.
 
 BITS 16
 
@@ -39,7 +38,7 @@ pic_init:
     mov     al, 0x01
     out     dx, al
 
-    ; Mask all IRQs except IRQ2 cascade until Firmware installs IVT handlers
+    ; Mask all IRQs except cascade IRQ2 until IVT handlers are installed
     mov     al, 0xFB
     mov     dx, PIC1_DATA
     out     dx, al

@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 
-# =============================================================================
-# Update and install required packages for IPO_Boot_ROM
-# =============================================================================
+# Install build and runtime dependencies
 
 set -euo pipefail
 
 echo "Updating package lists..."
 sudo apt update || { echo "Failed to update package lists"; exit 1; }
 
-# Check and install only missing packages
+# Install only missing packages
 REQUIRED_PACKAGES=(
-    "build-essential"    # make, gcc, binutils
-    "nasm"               # x86 assembler
-    "python3"            # ROM packaging & geometry scripts
-    "qemu-system-x86"    # qemu-system-i386 for hardware emulation
-    "qemu-utils"         # qemu-img for virtual disk management
-    "flashrom"           # SPI/LPC/parallel flash programming tool for physical hardware
-    "xxd"                # Binary and hex dump utility
+    "build-essential"    # C toolchain and build utilities
+    "nasm"               # 16/32-bit assembler
+    "python3"            # ROM image builder script
+    "qemu-system-x86"    # System emulator
+    "qemu-utils"         # Disk image utility
+    "flashrom"           # Hardware flash programmer
+    "xxd"                # Hex dump utility
 )
 
 for PACKAGE in "${REQUIRED_PACKAGES[@]}"; do
@@ -29,9 +27,7 @@ for PACKAGE in "${REQUIRED_PACKAGES[@]}"; do
     fi
 done
 
-# =============================================================================
-# Verify installation
-# =============================================================================
+# Verify installed tools
 
 echo "Verifying installation..."
 REQUIRED_COMMANDS=("nasm" "make" "python3" "qemu-system-i386" "flashrom")

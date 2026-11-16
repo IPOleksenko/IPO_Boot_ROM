@@ -1,27 +1,42 @@
-; payload_call.asm — Shadows 64 KB ROM to DRAM, verifies Firmware header, and jumps
+; Shadow firmware into 0xF0000-0xFFFFF DRAM, validate header, and jump.
+; Input: BX = 1 if >56 KiB payload is already staged at 0x2000:0000,
+;        BX = 0 to copy the 56 KiB bank from 0xF000:0000..0xDFFF.
 
-SHADOW_STAGE_SEG    equ 0x2000      ; Temporary DRAM buffer (0x20000-0x2FFFF)
+SHADOW_STAGE_SEG    equ 0x2000      ; Staging buffer (0x20000-0x2FFFF)
 SHADOW_TRAMP_SEG    equ 0x0000
 SHADOW_TRAMP_OFF    equ 0x0600      ; Low-RAM trampoline outside 0xF0000-0xFFFFF
 
 shadow_and_boot:
+    push    bx
     mov     si, msg_copying
     call    serial_print
     call    vga_print
+    pop     bx
 
-    ; Copy 64 KB Flash ROM window (0xF000:0000) to staging DRAM while ROM is mapped readable.
-    ; Changing PAM0 while still fetching from 0xF0000 would pull active code out from under EIP.
+    test    bx, bx
+    jnz     .stage_ready
+
+    ; Zero upper 8 KiB of staging buffer (0xF000:0xE000..0xFFFF)
     cld
+    mov     ax, SHADOW_STAGE_SEG
+    mov     es, ax
+    mov     di, 0xE000
+    mov     cx, 4096
+    xor     ax, ax
+    rep     stosw
+
+    ; Copy 56 KiB firmware bank (0xF000:0000..0xDFFF) to staging DRAM
     mov     ax, BOOTROM_SEG
     mov     ds, ax
     mov     ax, SHADOW_STAGE_SEG
     mov     es, ax
     xor     si, si
     xor     di, di
-    mov     cx, FW_COPY_WORDS
+    mov     cx, FW_BANK_COPY_WORDS
     rep     movsw
 
-    ; Copy position-independent trampoline into low conventional DRAM (0x0000:0x0600)
+.stage_ready:
+    ; Relocate trampoline below 0xF0000 before switching PAM0
     mov     ax, BOOTROM_SEG
     mov     ds, ax
     xor     ax, ax
@@ -36,7 +51,10 @@ shadow_and_boot:
     jmp     SHADOW_TRAMP_SEG:SHADOW_TRAMP_OFF
 
 shadow_trampoline:
-    ; Select i440FX PAM0 (0x59) or Q35/MCH PAM0 (0x90) from Scratch Host DID
+    ; Program PAM0 only on supported 0x8086 host bridges
+    mov     ax, [SCRATCH_HOST_VID]
+    cmp     ax, 0x8086
+    jne     .enter_shadow
     mov     ax, [SCRATCH_HOST_DID]
     test    ax, ax
     jz      .enter_shadow
@@ -52,7 +70,7 @@ shadow_trampoline:
     mov     bp, PCI_CONFIG_DATA + (HOST_PAM0_EXT & 0x03)
 
 .enable_rw:
-    ; Set PAM0 Read+Write DRAM (PAM_RW), preserving reserved lower nibble
+    ; Enable DRAM read/write in PAM0 while preserving low nibble
     mov     eax, esi
     mov     dx, PCI_CONFIG_ADDR
     out     dx, eax
@@ -63,7 +81,7 @@ shadow_trampoline:
     or      al, PAM_RW
     out     dx, al
 
-    ; Copy 64 KB from staging DRAM (0x2000:0000) into Shadow DRAM (0xF000:0000)
+    ; Copy 64 KiB minus 16 B reset vector into shadow DRAM (0xF000:0000)
     cld
     mov     ax, SHADOW_STAGE_SEG
     mov     ds, ax
@@ -71,10 +89,10 @@ shadow_trampoline:
     mov     es, ax
     xor     si, si
     xor     di, di
-    mov     cx, FW_COPY_WORDS
+    mov     cx, FW_COPY_WORDS - 8
     rep     movsw
 
-    ; Lock Shadow DRAM read-only (PAM_RE: reads -> DRAM, writes blocked)
+    ; Lock shadow DRAM read-only (PAM_RE)
     mov     eax, esi
     mov     dx, PCI_CONFIG_ADDR
     out     dx, eax
@@ -94,7 +112,7 @@ shadow_resume:
     call    serial_print
     call    vga_print
 
-    ; Validate 12-byte magic ("IPO_Firmware" or "IPO_Boot_ROM") at 0xF000:0x0000
+    ; Check 12 B firmware magic signature at 0xF000:0x0000
     mov     ax, FW_SHADOW_SEG
     mov     es, ax
     cld
